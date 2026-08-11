@@ -1,0 +1,250 @@
+/*
+ * MYSAT MAIN FIRMWARE 
+ * for ESP32-CAM				! select "AI Thinker ESP32-CAM" in Arduino IDE Boards Manager
+ *
+ *
+ * Main satellite firmware that simulates CubeSat operations and 
+ *   manages all subsystems of the MySat educational kit
+ *
+ * version: v.1.4
+ * author: MySat Developmet team
+ * license: Open Source (MIT) – github.com/mysatkit
+ *
+ * website: mysatkit.com
+ * 
+*/
+
+#include <Wire.h>
+#include <LittleFS.h>
+#include <Preferences.h>
+#include "server.h"
+#include "console.h"
+
+String ssid = "";
+String password = "";
+String useWiFi = "";
+
+bool debug_mode_active = false;
+
+Preferences prefs;
+bool isSystemStable = false;
+unsigned long lastHeartbeatUpdate = 0;
+
+bool loadWiFiConfig(String& ssid, String& password, String& useWiFi);
+void saveWiFiConfig(const String& ssid, const String& password, const String& useWiFi);
+void promptUserForWiFi(String& ssid, String& password);
+void tryConnectWiFi();
+void setWiFi();
+
+const int def_SDA(15);
+const int def_SCL(13);
+
+void setup() {
+  loadStateMotor();
+  control_motor(stateMotor);
+  Serial.begin(115200);
+  if (!LittleFS.begin(true)) {
+    LOG_ERROR("[FS] Failed to mount LittleFS!");
+    return;
+  }
+
+  LOG_INFO("[FS] LittleFS mounted successfully.");
+  Wire.begin(def_SDA, def_SCL);
+  initSensors();
+  initStarLed();
+  initSignalLed();
+  setTime();
+  initEventLog();
+  loadLoggerState();
+  loadCallSign(callSign);
+  if(loadWiFiConfig(ssid, password, useWiFi)){
+    if (useWiFi.equalsIgnoreCase("Yes")) {
+      tryConnectWiFi();
+      initServer();
+    }
+  }
+  //Serial.println("If you want to change WiFi data use the command: SetWIFI ");
+}
+
+unsigned long lastSensorUpdate = 0;
+const unsigned long SENSOR_INTERVAL = 500;
+
+void loop() {
+  if (useWiFi.equalsIgnoreCase("Yes")) {
+    server.handleClient(); 
+  }
+  handleCommands();
+  checkSystemState();
+  updateBlinkStarLed();
+
+  unsigned long now = millis();
+  if (now - lastSensorUpdate >= SENSOR_INTERVAL) {
+     lastSensorUpdate = now;
+     finalizeSystemStartup(); // Check stable system startup (runs only once)
+     pointer_of_sensors* data = get_sensors_data();
+     outputData(data);
+  }
+
+  updateSystemHeartbeat(); // Update Heartbeat every 5 seconds
+
+  saveBsecState();
+}
+
+bool loadWiFiConfig(String& ssid, String& password, String& useWiFi) {
+  if(!LittleFS.exists("/config.txt")) return false;
+
+  File file = LittleFS.open("/config.txt", "r");
+  if (!file) {
+    LOG_WARN("[CONFIG] No config.txt found");
+    pauseToRead();
+    return false;
+  }
+
+  int lineCount = 0;
+  while (file.available()) {
+    file.readStringUntil('\n');
+    lineCount++;
+  }
+  file.close();
+
+  if (lineCount < 3) {
+    LOG_WARN("[CONFIG] Invalid config.txt: less than 3 lines");
+    pauseToRead();
+    LittleFS.remove("/config.txt");
+    return false;
+  }
+
+  file = LittleFS.open("/config.txt", "r");
+  useWiFi = file.readStringUntil('\n');
+  useWiFi.trim();
+  ssid = file.readStringUntil('\n');
+  ssid.trim();
+  password = file.readStringUntil('\n');
+  password.trim();
+  file.close();
+
+  if (useWiFi.length() == 0 || ssid.length() == 0 || password.length() == 0) {
+    LOG_WARN("[CONFIG] Invalid config.txt: empty fields");
+    pauseToRead();
+    return false;
+  }
+
+  return true;
+}
+
+void saveWiFiConfig(const String& ssid, const String& password, const String& useWiFi) {  //write data to a file
+  File file = LittleFS.open("/config.txt", "w");
+  if (!file) {
+    LOG_ERROR("[CONFIG] Can't write config.txt");
+    pauseToRead();
+    return;
+  }
+  file.println(useWiFi);
+  file.println(ssid);
+  file.println(password);
+  file.close();
+}
+
+void promptUserForWiFi(String& ssid, String& password) {  //receive data from the user
+  unsigned long startTime = millis();
+  unsigned long lastRepeat = startTime;
+
+  Serial.print("Please enter WiFi ssid: ");
+  while (ssid.length() == 0) {
+    if (Serial.available()) {
+      ssid = Serial.readStringUntil('\n');
+      ssid.trim();
+      Serial.println(ssid);
+      break;
+    }
+
+    if (millis() - lastRepeat >= 10000) {
+      Serial.print("\nPlease enter WiFi ssid: ");
+      lastRepeat = millis();
+    }
+    delay(50);
+  }
+
+  startTime = millis();
+  lastRepeat = startTime;
+
+  Serial.print("Please enter WiFi password: ");
+  while (password.length() == 0) {
+    if (Serial.available()) {
+      password = Serial.readStringUntil('\n');
+      password.trim();
+      Serial.println(password);
+      break;
+    }
+
+    if (millis() - lastRepeat >= 10000) {
+      Serial.print("\nPlease enter WiFi password: ");
+      lastRepeat = millis();
+    }
+    delay(50);
+  }
+}
+
+void tryConnectWiFi() {  //used for connecting to Wi-Fi within other functions
+  while (true) {
+    Serial.print("Connecting to WiFi: ");
+    Serial.println(ssid);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid.c_str(), password.c_str());
+    int retry = 0;
+    while (WiFi.status() != WL_CONNECTED && retry < 20) {
+      delay(500);
+      Serial.print(".");
+      retry++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      LOG_INFO("[WIFI] Connected successfully!");
+      pauseToRead();
+      return;
+    } else {
+      LOG_WARN("[WIFI] Failed to connect to: " + ssid);
+      pauseToRead();
+      setWiFi();
+      if (!useWiFi.equalsIgnoreCase("Yes")) {
+        return;
+      }
+    }
+  }
+}
+
+void setWiFi() {  //Handles enabling or disabling Wi-Fi based on user input
+  unsigned long startTime = millis();
+  unsigned long lastRepeat = startTime;
+
+  Serial.println("Do you want to use WiFi? Yes/No");
+  while (!Serial.available()) {
+    if (millis() - lastRepeat >= 5000) {
+      Serial.println("Do you want to use WiFi? Yes/No");
+      lastRepeat = millis();
+    }
+    delay(50);
+  }
+  useWiFi = Serial.readStringUntil('\n');
+  useWiFi.trim();
+
+  if (useWiFi.equalsIgnoreCase("Yes")) {
+    ssid = "";
+    password = "";
+    promptUserForWiFi(ssid, password);
+
+    if (ssid.length() > 0 && password.length() > 0) {
+      saveWiFiConfig(ssid, password, useWiFi);
+    } else {
+      LOG_WARN("[WIFI] SSID or password is empty. Config not saved.");
+      pauseToRead();
+    }
+
+  } else {
+    saveWiFiConfig("none", "none", useWiFi);
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    LOG_INFO("[WIFI] WiFi disabled by user.");
+    pauseToRead();
+  }
+}
