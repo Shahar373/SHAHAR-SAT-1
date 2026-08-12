@@ -7,7 +7,9 @@ plugins {
 
 android {
     namespace = "com.shahar.shaharsat"
-    compileSdk = 36
+    // 35, not 36 — AGP 8.7.x (see ../build.gradle.kts) supports compileSdk
+    // up to 35. Revisit both together if a newer AGP is adopted later.
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.shahar.shaharsat"
@@ -17,7 +19,7 @@ android {
         // supporting older versions with the pre-31 permission model.
         // See docs/ARCHITECTURE.md's Android section.
         minSdk = 31
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
