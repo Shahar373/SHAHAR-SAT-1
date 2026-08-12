@@ -1,0 +1,111 @@
+name: CI
+
+# Runs on every push and PR. Both jobs must pass — a failing build or test
+# fails the workflow (GitHub Actions' default: any failing step fails the
+# job, any failing job fails the run). See docs/TEST_PLAN.md §1 and the
+# "Stabilization pass" notes in docs/ARCHITECTURE.md for why this exists:
+# neither the Android build nor a fresh firmware build had ever been
+# verified in CI before this workflow was added — see README.md's
+# "Build toolchain" table for the exact versions pinned below, which this
+# workflow must stay in sync with.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  android:
+    name: Android — unit tests + debug build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Reads android/gradle/wrapper/gradle-wrapper.properties itself —
+      # Gradle 8.9, matching AGP 8.7.x's minimum. No separate Gradle
+      # install needed; this step just caches ~/.gradle and wraps ./gradlew.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests (quaternion/SLERP math, telemetry frame parsing)
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Debug APK build
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shaharsat-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: ignore
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-report
+          path: android/app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore
+
+  firmware:
+    name: Firmware — compile for AI Thinker ESP32-CAM
+    runs-on: ubuntu-latest
+    env:
+      # Pinned to what this repo has actually build-verified — see
+      # docs/HARDWARE_NOTES.md's "Resolved by the official MySat guide"
+      # section for why this isn't 2.0.17 (the official guide's pin) yet:
+      # 2.0.17 pulls in a tool from a different, environment-blocked
+      # package index during CI-agent development; not yet confirmed to
+      # compile identically, though expected to (same 2.0.x line). Bump
+      # this once that's verified, updating README.md's toolchain table
+      # in the same commit.
+      ESP32_CORE_VERSION: "2.0.9"
+      NIMBLE_ARDUINO_VERSION: "2.2.3"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core (pinned)
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config set board_manager.additional_urls \
+            https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index || true
+          arduino-cli core install "esp32:esp32@${ESP32_CORE_VERSION}"
+
+      - name: Install NimBLE-Arduino (pinned, not in libraries.zip)
+        run: |
+          mkdir -p ~/Arduino/libraries
+          git clone --depth 1 --branch "${NIMBLE_ARDUINO_VERSION}" \
+            https://github.com/h2zero/NimBLE-Arduino.git \
+            ~/Arduino/libraries/NimBLE-Arduino
+
+      - name: Install bundled libraries (libraries.zip)
+        run: unzip -q firmware/libraries.zip -d ~/Arduino/libraries
+
+      - name: Compile
+        run: |
+          arduino-cli compile \
+            --fqbn "esp32:esp32:esp32cam:PartitionScheme=no_ota" \
+            --libraries ~/Arduino/libraries \
+            firmware/ino/MySat_main \
+            --warnings default
+
+      - name: Regression — Nano (ATmega328P) sketch still compiles
+        run: |
+          arduino-cli core install arduino:avr
+          arduino-cli compile \
+            --fqbn arduino:avr:nano \
+            firmware/ino/MySat_Nano_ATmega328p
