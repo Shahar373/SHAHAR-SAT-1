@@ -25,24 +25,43 @@ above — see [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) for what
 it does and why. Two build-setup changes it requires, beyond what's
 already in `libraries.zip`:
 
-**Extra library — install via Arduino IDE Library Manager (not bundled
-in `libraries.zip`):**
-- `NimBLE-Arduino` (h2zero) — targeting its 2.x API. Chosen over the
-  ESP32 core's built-in Bluedroid BLE stack because it costs roughly
-  100-150KB of flash instead of 500-700KB for an equivalent GATT server;
-  see `docs/ARCHITECTURE.md` §1.9/§2.2 for why that margin matters here.
+**Extra library — NimBLE-Arduino (h2zero), not in `libraries.zip`.**
+Chosen over the ESP32 core's built-in Bluedroid BLE stack because it
+costs roughly 100-150KB of flash instead of 500-700KB for an equivalent
+GATT server; see `docs/ARCHITECTURE.md` §1.9/§2.2. The Arduino Library
+Manager's index isn't reachable from the environment this was verified
+in, so it was added by cloning the repo straight into the libraries
+folder instead:
+```
+git clone --branch 2.2.3 https://github.com/h2zero/NimBLE-Arduino.git
+```
+**Pin to a 2.x release** (2.2.3 is the version this was actually built
+and tested against) — 1.x has a different callback API
+(`NimBLEServerCallbacks`/`NimBLECharacteristicCallbacks` take a plain
+`BLECharacteristic*` there, not `NimBLEConnInfo&`) and won't compile
+against `ble_service.h` as written.
 
-**Partition scheme — required, the stock schemes don't leave enough
-app-partition headroom for BLE alongside Wi-Fi + camera + BSEC:**
-- Use `ino/MySat_main/partitions.csv` (Tools > Partition Scheme > Custom
-  in the Arduino IDE, or select the file directly if your IDE version
-  supports per-sketch partition CSVs).
+**Partition scheme — select "No OTA (2MB APP/2MB SPIFFS)"** from
+Tools > Partition Scheme in the Arduino IDE. No custom partition file
+needed: this board definition (AI-Thinker ESP32-CAM) has no "Custom"
+option in its Partition Scheme menu in either of the two ESP32 core
+versions checked (2.0.9 and the current 3.3.11) — confirmed by
+inspecting `boards.txt` in both — so a `partitions.csv` placed in the
+sketch folder is silently ignored for this specific board. "No OTA"
+gives 2MB app / 2MB filesystem, comfortably covering both the compiled
+image (1.28MB, ~61% of the app partition) and the ~1.46MB worst-case
+LittleFS usage from `docs/ARCHITECTURE.md` §1.9.
 
-The BLE layer has not been build-verified against the real ESP32
-toolchain in the environment it was written in (no `arduino-cli` / ESP32
-core available there) — the first compile on real hardware is the
-opening step of Milestone 1's own test pass, see
-[`../docs/TEST_PLAN.md`](../docs/TEST_PLAN.md) §1.
+**Build-verified**: this compiles cleanly (`arduino-cli compile --fqbn
+esp32:esp32:esp32cam:PartitionScheme=no_ota`) against esp32:esp32@2.0.9
++ NimBLE-Arduino 2.2.3 + the libraries above, zero warnings from any of
+the new or edited files. 1,285,805 bytes flash (61% of the 2MB app
+partition), 61,804 bytes RAM (18%). This does not confirm behavior on
+real hardware (BLE pairing, actual timing, the PSRAM question in
+`docs/HARDWARE_NOTES.md` #1) — only that the code is syntactically and
+semantically valid C++ against the real toolchain and library APIs.
+See [`../docs/TEST_PLAN.md`](../docs/TEST_PLAN.md) §1 for what's still
+open.
 
 ---
 

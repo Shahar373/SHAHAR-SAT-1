@@ -257,31 +257,37 @@ access rather than retrofitting mutexes into working sensor code:
 loop()  [Arduino task, core 1]              NimBLE host task
    │                                              │
    ├─ get_sensors_data()      (unchanged)         │
-   ├─ bleSnapshotUpdate()  ──portMUX──►  [snapshot buffer]  ──► GATT read callback
-   ├─ bleNotifyTick()      ──────────────────────►  notify()
+   ├─ bleTelemetryTick()  ── setValue()+notify() ─┤  (NimBLE owns the storage)
    │                                              │
    └─ bleDrainCommandQueue() ◄──FreeRTOS queue────┘  write callback enqueues only
 ```
 
-**Telemetry — `loop()` is the sole writer.** At the end of each 500 ms sweep it formats
-frames into a BLE-owned buffer under a `portMUX_TYPE` spinlock and calls `notify()` from
-`loop()` itself. GATT read callbacks only `memcpy` *out* of that buffer under the same
-lock. No BLE code ever touches `pointers`, `mpu_data`, `ina_data` or any sensor global.
+**Telemetry — `loop()` is the sole writer, and no lock is needed.** `bleTelemetryTick()`
+runs from `loop()` (via `ble_service.h`, at the end of each iteration) and is the *only*
+code that ever reads `mpu_data`, `ina_data`, `bme_data`, `rtc_data` or `init_status` —
+exactly the same task that already writes them through `get_sensors_data()`. It formats a
+frame and calls the characteristic's `setValue()` + `notify()` directly; NimBLE owns and
+manages that value's storage internally, so a GATT read from the NimBLE host task never
+touches our sensor globals or our buffers at all. Building a separate portMUX-guarded
+snapshot layer here would guard against a race that the design already doesn't have — the
+producer/consumer split lives at the *command* boundary, not the telemetry one.
 
 **Commands — the write callback only enqueues.** It validates the payload, pushes a
 fixed-size struct to a FreeRTOS queue and returns immediately. `loop()` drains and
 executes on the Arduino task, exactly where the existing code already runs. FreeRTOS
-queues are thread-safe by construction.
+queues are thread-safe by construction — this is the one real cross-task boundary in the
+design, and it's why `command_bus.h`'s `executeCommand()` must only ever be called from
+`loop()`, never from a GATT callback directly.
 
 What this buys:
 
 | Hazard found in exploration | How the model avoids it |
 |---|---|
-| Torn reads of `mpu_data` / `ina_data` (written field-by-field) | BLE never reads them; it reads a snapshot copied under a lock |
-| Concurrent `Wire` transactions corrupting I²C | All I²C stays on `loopTask` |
-| Non-reentrant `json_string` / `csv_line` / `inputBuffer` | BLE uses its own buffers |
+| Torn reads of `mpu_data` / `ina_data` (written field-by-field) | BLE only ever reads them from `loop()`, the same task that writes them |
+| Concurrent `Wire` transactions corrupting I²C | All I²C stays on `loopTask` — commands execute there too |
+| Non-reentrant `json_string` / `csv_line` / `inputBuffer` | BLE uses its own buffers in `ble_telemetry.h` |
 | `esp_camera_fb_get()` / LittleFS races | Commands execute on `loopTask` |
-| 100 ms MPU stall inside a GATT callback | GATT callbacks never poll sensors |
+| 100 ms MPU stall inside a GATT callback | GATT callbacks never poll sensors — they only enqueue or return NimBLE's own cached value |
 
 **No mutexes are added to existing modules, and no existing file's behaviour changes.**
 
@@ -294,9 +300,10 @@ What this buys:
 | `firmware/ino/MySat_main/ble_telemetry.h` | Snapshot buffer, frame builders, notify scheduler |
 | `firmware/ino/MySat_main/ble_service.h` | NimBLE GATT server, advertising, security, queue |
 | `firmware/ino/MySat_main/spacecraft_mode.h` | Mode enum, `setMode()`, DESKTOP policy |
-| `firmware/ino/MySat_main/partitions.csv` | Custom no-OTA layout |
 
-All header-only with `#pragma once`, matching the existing convention.
+All header-only with `#pragma once`, matching the existing convention. No custom
+partition file — see §1.9 below for why the built-in "No OTA (2MB APP/2MB SPIFFS)" scheme
+is used instead.
 
 ### 2.3 Files that change, and how much
 
@@ -394,7 +401,11 @@ itself. Enabling Wi-Fi for photo retrieval accepts the contention for that windo
 Known costs, stated rather than hidden:
 
 - **Flash is the binding constraint.** NimBLE adds ~100-150 KB; Bluedroid would add
-  500-700 KB. Hence NimBLE, and hence a custom partition table.
+  500-700 KB. Hence NimBLE, and hence moving off the board's default "Huge APP" scheme to
+  "No OTA (2MB APP/2MB SPIFFS)" — verified by an actual `arduino-cli compile`: 1.28 MB used
+  (61%) of the 2 MB app partition. See firmware/README.md's build notes for why a *custom*
+  `partitions.csv` doesn't work here — the AI-Thinker ESP32-CAM board has no "Custom"
+  option in its Partition Scheme menu in either ESP32 core version checked.
 - **The ~100 ms MPU busy-wait every 500 ms will cause visible notification jitter.** BLE
   cannot transmit during it. Attitude at 10 Hz will not be perfectly even. Fixing it
   properly means restructuring `get_mpu_data()`, which is deferred — the jitter is
@@ -406,7 +417,36 @@ Known costs, stated rather than hidden:
 
 ---
 
-## 4. Repository structure
+## 4. Milestones
+
+| # | Deliverable | Status |
+|---|---|---|
+| 0 | Repo restructure, this doc set, `docs/HARDWARE_NOTES.md` | Done |
+| 1 | NimBLE skeleton — advertises `SHAHAR-SAT-1` | Done, compiles |
+| 2 | Attitude/power/environment/system characteristics + notify | Done, compiles |
+| 3 | Command queue, `command_bus.h`, console refactor, bonding | Done, compiles |
+| 4 | Android project, permissions, scan, connect, subscribe | Done |
+| 5 | Dashboard + telemetry rendering + Engineering screen | Done |
+| 6 | Controls with confirmation + seq replay guard | Done |
+| 7 | OpenGL attitude visualization | Done |
+| 8 | `spacecraft_mode.h`, Wi-Fi on demand, `TAKE_PHOTO` | Done, compiles |
+| 9 | Long-duration soak, `TEST_PLAN.md` execution, polish | **Blocked — needs the physical kit** |
+
+"Compiles" means a real `arduino-cli compile` against `esp32:esp32@2.0.9` +
+NimBLE-Arduino 2.2.3 succeeded with zero warnings from any new or edited file — see
+firmware/README.md's build notes. It does not mean verified on hardware: BLE pairing,
+real timing, and the PSRAM question in `docs/HARDWARE_NOTES.md` #1 are all still open.
+The Android app has not been built (this environment's network policy blocks
+`dl.google.com`, so the Android Gradle Plugin can't be resolved) — its Gradle wrapper is
+included so `./gradlew assembleDebug` / `./gradlew testDebugUnitTest` can run wherever
+normal network access is available.
+
+Milestones 1-3 are independently verifiable with nRF Connect alone, no Android build
+required, before ever touching the app.
+
+---
+
+## 5. Repository structure
 
 ```
 firmware/     ino/, libraries.zip, README.md, license.md   (upstream MySat, moved intact)
@@ -425,7 +465,7 @@ redistributed.
 
 ---
 
-## 5. Related documents
+## 6. Related documents
 
 - [BLE_PROTOCOL.md](BLE_PROTOCOL.md) — UUIDs, GATT layout, frame formats, security
 - [COMMANDS.md](COMMANDS.md) — command set, arguments, errors, safety

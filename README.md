@@ -37,24 +37,34 @@ BLE layer (NimBLE telemetry/commands/modes) and the Android app (BLE client, das
 3D attitude view) are both written. See [ARCHITECTURE.md §Milestones](docs/ARCHITECTURE.md)
 for the full sequence.
 
-**Not yet done, because both require the physical kit:**
-- Milestone 9 (long-duration soak) and every hardware-dependent item in
+**The firmware compiles.** `arduino-cli` and the ESP32 core were installed and the sketch
+was actually built — `esp32:esp32@2.0.9` + NimBLE-Arduino 2.2.3, `arduino-cli compile
+--fqbn esp32:esp32:esp32cam:PartitionScheme=no_ota` — and it succeeds with zero warnings
+from any new or edited file: 1,285,805 bytes flash (61% of the 2MB app partition),
+61,804 bytes RAM (18%). That run caught and fixed two real bugs before anyone touched
+real hardware: pinning NimBLE-Arduino to a 2.x release (1.x has an incompatible callback
+API), and discovering that the AI-Thinker ESP32-CAM board has no "Custom" partition
+option in its menu at all (in either ESP32 core version checked) — so the plan to ship a
+custom `partitions.csv` was replaced with the board's built-in "No OTA (2MB APP/2MB
+SPIFFS)" scheme, which fits comfortably. See `firmware/README.md` for the exact commands.
+
+**Still not done, because it needs the physical kit:**
+- Milestone 9 (long-duration soak) and every item in
   [HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) — starting with whether PSRAM is present,
   which decides whether the camera survives running alongside BLE at all.
-- **The firmware has not been compiled** against the real ESP32 toolchain — no
-  `arduino-cli`/ESP32 core was available in the environment it was written in. First
-  compile is the opening step of [TEST_PLAN.md §1](docs/TEST_PLAN.md).
-- **The Android app has not been built** — this environment's outbound proxy explicitly
-  denies `dl.google.com`, so the Android Gradle Plugin and AndroidX dependencies can't be
-  resolved here. The Gradle wrapper is included (`android/gradlew`), so
-  `./gradlew assembleDebug` / `./gradlew testDebugUnitTest` should run on a machine with
-  normal network access — that first build is Milestone 4's own verification step. The two
-  unit test suites (quaternion/SLERP math, telemetry frame parsing) were checked by hand
-  against the protocol spec but have not actually been executed.
+- Everything a compiler can't check: real advertising, pairing, notification timing,
+  actual sensor behavior. That's what [TEST_PLAN.md](docs/TEST_PLAN.md) §2 onward covers.
 
-In short: the code is written and internally consistent with the documented design, but
-**nothing has compiled or run yet** — treat the first real build, on hardware or with SDK
-access, as the actual start of verification.
+**The Android app has not been built** — this environment's outbound proxy explicitly
+denies `dl.google.com` (confirmed via the proxy's own status endpoint, not a transient
+failure), so the Android Gradle Plugin and AndroidX dependencies can't be resolved here,
+and there was no equivalent workaround available the way there was for the firmware's
+ESP32 toolchain (which comes from Espressif's and GitHub's own infrastructure, not
+Google's). The Gradle wrapper is included (`android/gradlew`), so `./gradlew
+assembleDebug` / `./gradlew testDebugUnitTest` should run on a machine with normal network
+access — that first build is Milestone 4's own verification step. The two unit test
+suites (quaternion/SLERP math, telemetry frame parsing) were checked by hand against the
+protocol spec but have not actually been executed.
 
 ## Firmware origin
 

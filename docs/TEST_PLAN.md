@@ -31,8 +31,8 @@ the milestone is not done, regardless of what BLE feature landed.
 
 | # | Check | Expected | Reference |
 |---|---|---|---|
-| 1.1 | `arduino-cli compile --fqbn esp32:esp32:esp32cam` | Succeeds, record flash % | [ARCHITECTURE.md §1.9](ARCHITECTURE.md) |
-| 1.2 | App partition usage | **Fail the milestone above 90%** | Custom `partitions.csv` |
+| 1.1 | `arduino-cli compile --fqbn esp32:esp32:esp32cam:PartitionScheme=no_ota` | Succeeds, record flash % — **already passed once** (esp32:esp32@2.0.9 + NimBLE-Arduino 2.2.3, zero warnings); re-run against whatever core version you actually install, since versions drift | [ARCHITECTURE.md §1.9](ARCHITECTURE.md) |
+| 1.2 | App partition usage | **Fail the milestone above 90%** | "No OTA (2MB APP/2MB SPIFFS)" scheme — already measured at 61% via `arduino-cli`, see firmware/README.md |
 | 1.3 | `ESP.getFreeHeap()` before/after `bleInit()` | Documented delta, no crash | |
 | 1.4 | `ESP.getMinFreeHeap()` over a 1 h idle run | No downward trend (leak) | [HARDWARE_NOTES.md §2](HARDWARE_NOTES.md) |
 | 1.5 | PSRAM check | Logged at boot, matches [HARDWARE_NOTES.md §1](HARDWARE_NOTES.md) | |

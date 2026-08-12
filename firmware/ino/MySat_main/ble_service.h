@@ -6,13 +6,16 @@
 // docs/ARCHITECTURE.md §2.1 for the concurrency model and
 // docs/BLE_PROTOCOL.md for the wire format this implements.
 //
-// Dependency: NimBLE-Arduino (h2zero/NimBLE-Arduino), targeting its 2.x
-// API (NimBLEConnInfo-based callbacks). Install via Arduino Library
-// Manager — it is not bundled in libraries.zip. See firmware/README.md.
-// This file has not been build-verified against the real ESP32 toolchain
-// in this environment (no arduino-cli / ESP32 core available here) — the
-// first compile on real hardware is Milestone 1's own verification step,
-// see docs/TEST_PLAN.md §1.
+// Dependency: NimBLE-Arduino (h2zero/NimBLE-Arduino) 2.x — pin to 2.2.3 or
+// later. 1.x has a different callback API (plain BLECharacteristic*, no
+// NimBLEConnInfo&) and will not compile against this file. Not bundled
+// in libraries.zip — see firmware/README.md for how it was added.
+//
+// Build-verified: compiles clean (zero warnings) via `arduino-cli compile
+// --fqbn esp32:esp32:esp32cam:PartitionScheme=no_ota` against
+// esp32:esp32@2.0.9 + NimBLE-Arduino 2.2.3. Not hardware-verified — see
+// docs/TEST_PLAN.md §1 for what that still requires (real advertising,
+// pairing, notification timing).
 #pragma once
 
 #include <NimBLEDevice.h>
