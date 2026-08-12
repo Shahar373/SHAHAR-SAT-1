@@ -1,0 +1,25 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/vector"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#0B0F14"
+        android:pathData="M0,0h108v108h-108z" />
+    <!-- CubeSat body -->
+    <path
+        android:fillColor="#00E5A0"
+        android:pathData="M40,40 L68,40 L68,68 L40,68 Z" />
+    <!-- Solar panels -->
+    <path
+        android:fillColor="#3DA5F5"
+        android:pathData="M12,48 L36,48 L36,60 L12,60 Z" />
+    <path
+        android:fillColor="#3DA5F5"
+        android:pathData="M72,48 L96,48 L96,60 L72,60 Z" />
+    <!-- Antenna -->
+    <path
+        android:strokeColor="#00E5A0"
+        android:strokeWidth="3"
+        android:pathData="M54,40 L54,24" />
+</vector>

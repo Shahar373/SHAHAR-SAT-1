@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Dark-only per the "mission control" design brief — real theming is
+      done in Compose (ui/theme/Theme.kt); this base XML theme only needs
+      to cover the pre-Compose window background so there's no light
+      flash before the first frame renders.
+    -->
+    <style name="Theme.ShaharSat" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/mission_background</item>
+        <item name="android:statusBarColor">@color/mission_background</item>
+        <item name="android:navigationBarColor">@color/mission_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
