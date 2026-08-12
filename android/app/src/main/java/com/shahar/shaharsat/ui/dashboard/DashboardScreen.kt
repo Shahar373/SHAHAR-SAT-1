@@ -40,6 +40,7 @@ fun DashboardScreen(
     val system by viewModel.system.collectAsState()
     val pending by viewModel.pendingCommands.collectAsState()
     val lastError by viewModel.lastError.collectAsState()
+    val linkInfo by viewModel.linkInfo.collectAsState()
 
     var confirming by remember { mutableStateOf<Command?>(null) }
 
@@ -53,7 +54,13 @@ fun DashboardScreen(
 
     Scaffold(
         containerColor = MissionColors.Background,
-        topBar = { DashboardHeader(connected = system != null, onOpenEngineering = onOpenEngineering) },
+        topBar = {
+            DashboardHeader(
+                connected = system != null,
+                bonding = linkInfo.bonding,
+                onOpenEngineering = onOpenEngineering
+            )
+        },
         bottomBar = {
             ControlsBar(
                 pending = pending,
@@ -88,7 +95,7 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun DashboardHeader(connected: Boolean, onOpenEngineering: () -> Unit) {
+private fun DashboardHeader(connected: Boolean, bonding: Boolean, onOpenEngineering: () -> Unit) {
     TopAppBar(
         title = {
             Column {
@@ -103,6 +110,16 @@ private fun DashboardHeader(connected: Boolean, onOpenEngineering: () -> Unit) {
                         style = MaterialTheme.typography.labelSmall,
                         color = if (connected) MissionColors.AccentGreen else MissionColors.AccentRed
                     )
+                    // Real, driven state — see ble/ConnectionState.kt's doc on why this
+                    // isn't its own ConnectionState. Pairing happens in the background
+                    // after Connected, not before it (PING/GET_STATUS work unbonded).
+                    if (bonding) {
+                        Text(
+                            "· PAIRING — enter passkey on phone",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MissionColors.AccentAmber
+                        )
+                    }
                 }
             }
         },

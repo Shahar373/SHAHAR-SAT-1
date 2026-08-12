@@ -35,11 +35,116 @@ data class RawPacketLogEntry(
 }
 
 /**
+ * A single BLE GATT operation to run on this connection. Android's
+ * BluetoothGatt allows exactly one outstanding operation at a time —
+ * issuing a second `writeDescriptor`/`writeCharacteristic`/etc. before the
+ * previous one's callback has fired causes the second (and any further)
+ * call to silently fail. [GattOperationQueue] exists so nothing in this
+ * file ever violates that rule. See docs/ARCHITECTURE.md's Android
+ * section and docs/TEST_PLAN.md §3/§11.
+ */
+private sealed interface GattOp {
+    data class RequestMtu(val mtu: Int) : GattOp
+    data object DiscoverServices : GattOp
+    data class EnableNotification(val charUuid: UUID) : GattOp
+    data class WriteCharacteristic(val charUuid: UUID, val bytes: ByteArray) : GattOp
+    data class ReadCharacteristic(val charUuid: UUID) : GattOp
+}
+
+/**
+ * Serializes GATT operations on a single [BluetoothGatt] connection into a
+ * strict one-at-a-time queue: enqueue, dispatch, wait for the matching
+ * callback (or a timeout), dispatch the next one. Deliberately a plain
+ * FIFO queue + timeout, not a general async framework — this only needs
+ * to handle the five operation kinds in [GattOp].
+ *
+ * A stuck operation (callback never fires — e.g. the link drops mid-op)
+ * times out after [OP_TIMEOUT_MS] and the queue moves on, rather than
+ * wedging every subsequent operation forever.
+ */
+private class GattOperationQueue(
+    private val scope: CoroutineScope,
+    private val onOpFailed: (GattOp, String) -> Unit
+) {
+    private val pending = ArrayDeque<GattOp>()
+    private var inFlight: GattOp? = null
+    private var inFlightToken = 0L
+    private var timeoutJob: Job? = null
+    private var dispatcher: ((GattOp) -> Boolean)? = null
+
+    /** Must be called once a live [BluetoothGatt] is available; cleared on disconnect. */
+    fun attach(dispatch: (GattOp) -> Boolean) {
+        dispatcher = dispatch
+    }
+
+    fun detach() {
+        dispatcher = null
+        pending.clear()
+        inFlight = null
+        timeoutJob?.cancel()
+    }
+
+    fun enqueue(op: GattOp) {
+        pending.addLast(op)
+        processNext()
+    }
+
+    private fun processNext() {
+        if (inFlight != null) return
+        val op = pending.removeFirstOrNull() ?: return
+        val dispatch = dispatcher
+        if (dispatch == null) {
+            onOpFailed(op, "no active GATT connection")
+            processNext()
+            return
+        }
+        inFlight = op
+        val token = ++inFlightToken
+        val accepted = try { dispatch(op) } catch (e: SecurityException) { false }
+        if (!accepted) {
+            complete(token, false, "dispatch rejected (permission or GATT busy)")
+            return
+        }
+        timeoutJob?.cancel()
+        timeoutJob = scope.launch {
+            delay(OP_TIMEOUT_MS)
+            complete(token, false, "timed out waiting for callback")
+        }
+    }
+
+    /** Call from the matching GATT callback (onMtuChanged, onServicesDiscovered, onDescriptorWrite, ...). */
+    fun complete(token: Long, success: Boolean, errorMessage: String? = null) {
+        if (token != inFlightToken) return // stale callback or already timed out
+        val op = inFlight ?: return
+        timeoutJob?.cancel()
+        inFlight = null
+        if (!success) onOpFailed(op, errorMessage ?: "failed")
+        processNext()
+    }
+
+    /** The token for the operation currently in flight, for callbacks to pass back to [complete]. */
+    val currentToken: Long get() = inFlightToken
+
+    companion object {
+        private const val OP_TIMEOUT_MS = 5_000L
+    }
+}
+
+/**
  * Owns the BLE connection lifecycle: permission/adapter checks, scanning
- * filtered by service UUID, GATT connect + service discovery + MTU
- * negotiation, subscribing to the four telemetry + two response/event
- * characteristics, and writing commands. Emits raw bytes only —
+ * filtered by service UUID, GATT connect + a serialized setup sequence
+ * (MTU -> service discovery -> six notification subscriptions), and
+ * writing commands. Emits raw bytes only —
  * [com.shahar.shaharsat.data.TelemetryRepository] owns JSON parsing.
+ *
+ * Bonding: per docs/BLE_PROTOCOL.md §8, PING/GET_STATUS work before
+ * pairing, so reaching [ConnectionState.Connected] does not wait on a
+ * bond. Instead, once setup finishes, [BleClient] proactively calls
+ * `createBond()` in the background (unless already bonded) so pairing
+ * happens up front rather than being deferred to the first authenticated
+ * command. Bonding progress is tracked in [LinkInfo], not as its own
+ * [ConnectionState] — it's orthogonal to connection state in this
+ * design, not a phase that blocks reaching Connected.
  *
  * Reconnection: on an unexpected disconnect, retries with bounded
  * exponential backoff (2s/4s/8s/16s/30s, [MAX_RECONNECT_ATTEMPTS]
@@ -61,6 +166,24 @@ class BleClient(private val context: Context) {
     private var reconnectAttempt = 0
     private var lastKnownAddress: String? = null
     private var userInitiatedDisconnect = false
+    private var pendingNotifySetup = 0
+
+    private val opQueue = GattOperationQueue(scope) { op, message ->
+        val uuid = when (op) {
+            is GattOp.RequestMtu -> null
+            GattOp.DiscoverServices -> null
+            is GattOp.EnableNotification -> op.charUuid
+            is GattOp.WriteCharacteristic -> op.charUuid
+            is GattOp.ReadCharacteristic -> op.charUuid
+        }
+        val now = System.currentTimeMillis()
+        _linkInfo.update { it.copy(lastError = "$op: $message") }
+        _rawLog.tryEmit(RawPacketLogEntry(RawPacketLogEntry.Direction.ERROR, uuid ?: Uuids.SERVICE, "$op failed: $message", now))
+        // A failed EnableNotification during setup still counts toward
+        // finishing the setup sequence — one missing/broken characteristic
+        // must not block the others or leave the connection stuck pending.
+        if (op is GattOp.EnableNotification) onNotifySetupStepDone()
+    }
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -85,8 +208,11 @@ class BleClient(private val context: Context) {
             if (intent.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
             val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
             if (device?.address != lastKnownAddress) return
-            val bonded = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1) == BluetoothDevice.BOND_BONDED
-            _linkInfo.update { it.copy(bonded = bonded) }
+            when (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)) {
+                BluetoothDevice.BOND_BONDING -> _linkInfo.update { it.copy(bonding = true) }
+                BluetoothDevice.BOND_BONDED -> _linkInfo.update { it.copy(bonding = false, bonded = true) }
+                BluetoothDevice.BOND_NONE -> _linkInfo.update { it.copy(bonding = false, bonded = false) }
+            }
         }
     }
 
@@ -172,9 +298,11 @@ class BleClient(private val context: Context) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     reconnectAttempt = 0
-                    g.requestMtu(BLE_PREFERRED_MTU)
+                    opQueue.attach { op -> dispatch(g, op) }
+                    opQueue.enqueue(GattOp.RequestMtu(BLE_PREFERRED_MTU))
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
+                    opQueue.detach()
                     _linkInfo.update { it.copy(servicesDiscovered = false) }
                     val reason = if (status != BluetoothGatt.GATT_SUCCESS) "GATT status $status" else null
                     _connectionState.value = ConnectionState.Disconnected(reason)
@@ -186,29 +314,58 @@ class BleClient(private val context: Context) {
         }
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
-            _linkInfo.update { it.copy(mtu = mtu) }
-            g.discoverServices()
+            val token = opQueue.currentToken
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                _linkInfo.update { it.copy(mtu = mtu) }
+                opQueue.enqueue(GattOp.DiscoverServices)
+                opQueue.complete(token, true)
+            } else {
+                opQueue.complete(token, false, "MTU negotiation failed, status=$status")
+                // Still worth trying to discover services on the default MTU.
+                opQueue.enqueue(GattOp.DiscoverServices)
+            }
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            val token = opQueue.currentToken
             if (status != BluetoothGatt.GATT_SUCCESS) {
+                opQueue.complete(token, false, "service discovery failed, status=$status")
                 _connectionState.value = ConnectionState.Error("Service discovery failed (status $status)")
                 return
             }
             val service = g.getService(Uuids.SERVICE)
             if (service == null) {
+                opQueue.complete(token, false, "SHAHAR-SAT service not present")
                 _connectionState.value = ConnectionState.Error("SHAHAR-SAT service not found on device")
                 return
             }
-            for (uuid in notifyCharUuids) {
-                val c = service.getCharacteristic(uuid) ?: continue
-                g.setCharacteristicNotification(c, true)
-                val cccd = c.getDescriptor(Uuids.CLIENT_CHARACTERISTIC_CONFIG) ?: continue
-                writeDescriptorEnableNotify(g, cccd)
+
+            val presentUuids = notifyCharUuids.filter { service.getCharacteristic(it) != null }
+            pendingNotifySetup = presentUuids.size
+            if (pendingNotifySetup == 0) {
+                opQueue.complete(token, false, "no known characteristics present")
+                _connectionState.value = ConnectionState.Error("No SHAHAR-SAT characteristics found")
+                return
             }
-            _linkInfo.update { it.copy(deviceAddress = g.device.address, servicesDiscovered = true) }
-            _connectionState.value = ConnectionState.Connected(g.device.address, g.device.name)
-            readRssi()
+            presentUuids.forEach { opQueue.enqueue(GattOp.EnableNotification(it)) }
+            _linkInfo.update { it.copy(deviceAddress = g.device.address) }
+            opQueue.complete(token, true)
+        }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            // Only the success path calls onNotifySetupStepDone() here — on
+            // failure, opQueue.complete() below already triggers it exactly
+            // once via the onOpFailed callback passed to GattOperationQueue.
+            // Calling it again here too would double-decrement
+            // pendingNotifySetup and fire ConnectionState.Connected one
+            // characteristic early.
+            val token = opQueue.currentToken
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                opQueue.complete(token, true)
+                onNotifySetupStepDone()
+            } else {
+                opQueue.complete(token, false, "descriptor write failed, status=$status")
+            }
         }
 
         @Suppress("DEPRECATION") // required override for API < 33 (minSdk 31 must still work on Android 12/12L)
@@ -227,12 +384,90 @@ class BleClient(private val context: Context) {
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                _rawLog.tryEmit(RawPacketLogEntry(
-                    RawPacketLogEntry.Direction.ERROR, characteristic.uuid,
-                    "write failed, status=$status", System.currentTimeMillis()
-                ))
+            val token = opQueue.currentToken
+            opQueue.complete(token, status == BluetoothGatt.GATT_SUCCESS, "write failed, status=$status")
+        }
+
+        @Suppress("DEPRECATION") // required override for API < 33 (minSdk 31 must still work on Android 12/12L) — same reasoning as onCharacteristicChanged above
+        override fun onCharacteristicRead(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            val token = opQueue.currentToken
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                @Suppress("DEPRECATION")
+                emitNotification(characteristic.uuid, characteristic.value ?: ByteArray(0))
             }
+            opQueue.complete(token, status == BluetoothGatt.GATT_SUCCESS, "read failed, status=$status")
+        }
+
+        override fun onCharacteristicRead(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+            val token = opQueue.currentToken
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                emitNotification(characteristic.uuid, value)
+            }
+            opQueue.complete(token, status == BluetoothGatt.GATT_SUCCESS, "read failed, status=$status")
+        }
+    }
+
+    /**
+     * One EnableNotification finished (success, failure, or timeout) during
+     * initial setup. Once all of them have, the connection is genuinely
+     * usable — this is what actually flips [ConnectionState] to
+     * [ConnectionState.Connected], not service discovery finishing.
+     */
+    private fun onNotifySetupStepDone() {
+        if (pendingNotifySetup <= 0) return
+        pendingNotifySetup--
+        if (pendingNotifySetup == 0) {
+            val g = gatt ?: return
+            _linkInfo.update { it.copy(servicesDiscovered = true) }
+            _connectionState.value = ConnectionState.Connected(g.device.address, g.device.name)
+            readRssi()
+            ensureBonded(g.device)
+        }
+    }
+
+    /** Proactively starts pairing if not already bonded — see the class doc on why this isn't a [ConnectionState]. */
+    private fun ensureBonded(device: BluetoothDevice) {
+        if (device.bondState == BluetoothDevice.BOND_NONE) {
+            try { device.createBond() } catch (_: SecurityException) { /* permission revoked mid-session */ }
+        } else if (device.bondState == BluetoothDevice.BOND_BONDED) {
+            _linkInfo.update { it.copy(bonded = true) }
+        }
+    }
+
+    /** Performs the actual platform call for one queued operation. Returns false if it couldn't even be issued. */
+    private fun dispatch(g: BluetoothGatt, op: GattOp): Boolean = when (op) {
+        is GattOp.RequestMtu -> g.requestMtu(op.mtu)
+
+        GattOp.DiscoverServices -> g.discoverServices()
+
+        is GattOp.EnableNotification -> {
+            val service = g.getService(Uuids.SERVICE)
+            val characteristic = service?.getCharacteristic(op.charUuid)
+            val cccd = characteristic?.getDescriptor(Uuids.CLIENT_CHARACTERISTIC_CONFIG)
+            if (characteristic == null || cccd == null) {
+                false
+            } else {
+                g.setCharacteristicNotification(characteristic, true)
+                writeDescriptorEnableNotify(g, cccd)
+            }
+        }
+
+        is GattOp.WriteCharacteristic -> {
+            val service = g.getService(Uuids.SERVICE)
+            val characteristic = service?.getCharacteristic(op.charUuid)
+            if (characteristic == null) {
+                false
+            } else {
+                val now = System.currentTimeMillis()
+                _rawLog.tryEmit(RawPacketLogEntry(RawPacketLogEntry.Direction.TX, op.charUuid, op.bytes.decodeToString(), now))
+                writeCharacteristicBytes(g, characteristic, op.bytes)
+            }
+        }
+
+        is GattOp.ReadCharacteristic -> {
+            val service = g.getService(Uuids.SERVICE)
+            val characteristic = service?.getCharacteristic(op.charUuid)
+            if (characteristic == null) false else g.readCharacteristic(characteristic)
         }
     }
 
@@ -242,9 +477,9 @@ class BleClient(private val context: Context) {
         _rawLog.tryEmit(RawPacketLogEntry(RawPacketLogEntry.Direction.RX, uuid, bytes.decodeToString(), now))
     }
 
-    private fun writeDescriptorEnableNotify(g: BluetoothGatt, descriptor: BluetoothGattDescriptor) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+    private fun writeDescriptorEnableNotify(g: BluetoothGatt, descriptor: BluetoothGattDescriptor): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothStatusCodes.SUCCESS
         } else {
             @Suppress("DEPRECATION")
             descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
@@ -253,15 +488,7 @@ class BleClient(private val context: Context) {
         }
     }
 
-    /** Returns false immediately if not connected — callers must not queue commands while disconnected. */
-    fun sendCommand(bytes: ByteArray): Boolean {
-        val g = gatt ?: return false
-        val service = g.getService(Uuids.SERVICE) ?: return false
-        val characteristic = service.getCharacteristic(Uuids.CHAR_COMMAND) ?: return false
-
-        val now = System.currentTimeMillis()
-        _rawLog.tryEmit(RawPacketLogEntry(RawPacketLogEntry.Direction.TX, Uuids.CHAR_COMMAND, bytes.decodeToString(), now))
-
+    private fun writeCharacteristicBytes(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, bytes: ByteArray): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             g.writeCharacteristic(characteristic, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
         } else {
@@ -272,6 +499,20 @@ class BleClient(private val context: Context) {
             @Suppress("DEPRECATION")
             g.writeCharacteristic(characteristic)
         }
+    }
+
+    /**
+     * Enqueues the command write and returns immediately. `true` only
+     * means "there is a connection to queue this on" — it is not a
+     * synchronous success/failure of the BLE write itself, which is
+     * inherently asynchronous. Callers (see [CommandSender]) already wait
+     * for the Response-characteristic notification with their own
+     * timeout, which is what actually confirms the round trip.
+     */
+    fun sendCommand(bytes: ByteArray): Boolean {
+        if (gatt == null) return false
+        opQueue.enqueue(GattOp.WriteCharacteristic(Uuids.CHAR_COMMAND, bytes))
+        return true
     }
 
     fun readRssi() {
@@ -304,6 +545,7 @@ class BleClient(private val context: Context) {
         userInitiatedDisconnect = true
         reconnectJob?.cancel()
         stopScan()
+        opQueue.detach()
         gatt?.close()
         gatt = null
         try { context.unregisterReceiver(bondReceiver) } catch (_: IllegalArgumentException) { /* not registered */ }

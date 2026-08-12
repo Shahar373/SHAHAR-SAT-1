@@ -2,8 +2,10 @@ package com.shahar.shaharsat.ui.dashboard
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.shahar.shaharsat.ble.BleClient
 import com.shahar.shaharsat.ble.CommandOutcome
 import com.shahar.shaharsat.ble.CommandSender
+import com.shahar.shaharsat.ble.LinkInfo
 import com.shahar.shaharsat.data.AttitudeFrame
 import com.shahar.shaharsat.data.Command
 import com.shahar.shaharsat.data.EnvironmentFrame
@@ -29,13 +31,16 @@ import kotlinx.coroutines.launch
  */
 class DashboardViewModel(
     private val telemetryRepository: TelemetryRepository,
-    private val commandSender: CommandSender
+    private val commandSender: CommandSender,
+    bleClient: BleClient
 ) : ViewModel() {
 
     val attitude: StateFlow<AttitudeFrame?> = telemetryRepository.attitude
     val power: StateFlow<PowerFrame?> = telemetryRepository.power
     val environment: StateFlow<EnvironmentFrame?> = telemetryRepository.environment
     val system: StateFlow<SystemFrame?> = telemetryRepository.system
+    /** Surfaces bonding progress here (not as a ConnectionState) — see ConnectionState.kt's class doc. */
+    val linkInfo: StateFlow<LinkInfo> = bleClient.linkInfo
 
     private val _pendingCommands = MutableStateFlow<Set<Command>>(emptySet())
     val pendingCommands: StateFlow<Set<Command>> = _pendingCommands.asStateFlow()

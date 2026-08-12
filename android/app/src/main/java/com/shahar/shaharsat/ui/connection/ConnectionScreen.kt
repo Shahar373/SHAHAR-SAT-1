@@ -98,7 +98,6 @@ private fun StatusLine(state: ConnectionState) {
         is ConnectionState.Idle -> "Ready to search" to MissionColors.TextSecondary
         is ConnectionState.Scanning -> "Searching for spacecraft..." to MissionColors.AccentBlue
         is ConnectionState.Connecting -> "Connecting..." to MissionColors.AccentBlue
-        is ConnectionState.Bonding -> "Pairing — enter the passkey on your phone" to MissionColors.AccentAmber
         is ConnectionState.Connected -> "CONNECTED" to MissionColors.AccentGreen
         is ConnectionState.Disconnected -> "DISCONNECTED" to MissionColors.AccentRed
         is ConnectionState.PermissionsRequired -> "Bluetooth permissions required" to MissionColors.AccentAmber

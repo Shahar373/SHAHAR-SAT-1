@@ -91,7 +91,7 @@ private fun ConnectionCard(
         MetricRow("Address", link.deviceAddress)
         MetricRow("RSSI", link.rssi?.toString(), " dBm")
         MetricRow("MTU", link.mtu.toString())
-        MetricRow("Bonded", if (link.bonded) "yes" else "no")
+        MetricRow("Bonded", if (link.bonded) "yes" else if (link.bonding) "pairing..." else "no")
         MetricRow("Services discovered", if (link.servicesDiscovered) "yes" else "no")
         MetricRow("RX / TX packets", "$rxCount / $txCount")
         MetricRow("Parse errors", parseErrors.toString())
