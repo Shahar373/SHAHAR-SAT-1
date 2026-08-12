@@ -135,6 +135,9 @@ been seen at least once", not "the sensor is healthy now".
 
 ### 2.4 Sun sensors — `ads_data` (`ADC.h:11-16`)
 
+Shipped on the **Power** characteristic (`7a3e0002`) alongside the EPS fields — see
+[BLE_PROTOCOL.md §6.2](BLE_PROTOCOL.md), not a separate characteristic.
+
 | Field | Key | Channel | Direction | Body axis |
 |---|---|---|---|---|
 | `ph1` | `ph1` | A0 | Left | −Y |

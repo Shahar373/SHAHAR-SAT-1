@@ -217,7 +217,8 @@ pitch ±90°.
 ### 6.2 Power — `7a3e0002`
 
 ```json
-{"v":1,"t":128374,"bv":3.91,"bi":-42.5,"sv":4.82,"sil":31.2,"sir":28.7,"sp":289.4}
+{"v":1,"t":128374,"bv":3.91,"bi":-42.5,"sv":4.82,"sil":31.2,"sir":28.7,"sp":289.4,
+ "ph1":812,"ph2":140,"ph3":95,"ph4":1203}
 ```
 
 | Key | Type | Unit | Meaning |
@@ -228,9 +229,17 @@ pitch ±90°.
 | `sil` | float | mA | Left panel current, CH2 |
 | `sir` | float | mA | Right panel current, CH3 |
 | `sp` | float | mW | Solar power, computed `sv × (sil + sir)` |
+| `ph1` | float | raw ADC counts | Sun sensor, left (ADS1015 A0) |
+| `ph2` | float | raw ADC counts | Sun sensor, back (A1) |
+| `ph3` | float | raw ADC counts | Sun sensor, right (A2) |
+| `ph4` | float | raw ADC counts | Sun sensor, front (A3) |
 
 `sp` is the only derived value; it is arithmetic on measured fields, not a new hardware
-claim.
+claim. The four sun sensors are folded into this frame rather than given their own
+characteristic — they're EPS/solar-adjacent and comfortably fit the MTU budget alongside
+the INA3221 fields (see §5's size discipline). `bv`/`bi`/`sv`/`sil`/`sir`/`sp` are omitted
+as a group when the INA3221 is absent; `ph1`-`ph4` are omitted as a group when the ADS1015
+is absent — each independently, so one missing chip doesn't blank the other's readings.
 
 **Not present, because the hardware does not provide them:**
 

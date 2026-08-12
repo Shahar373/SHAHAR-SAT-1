@@ -53,15 +53,37 @@ void bleBuildAttitudeFrame() {
 }
 
 void bleBuildPowerFrame() {
-  int written;
+  // Sun sensors (ph1-4, ADS1015) are folded into this frame rather than
+  // given a dedicated characteristic — EPS/solar-adjacent, and they fit
+  // the MTU budget comfortably alongside the INA3221 fields. See
+  // docs/BLE_PROTOCOL.md §6.2 / docs/TELEMETRY.md §2.4.
+  char epsPart[96] = "";
   if (init_status.ina_) {
     float solarPowerMw = ina_data.SolarPanelVoltage *
                           (ina_data.leftSolarPanelCurrent + ina_data.rightSolarPanelCurrent);
-    written = snprintf(bleFrames.power, BLE_MAX_FRAME_LEN,
-      "{\"v\":%d,\"t\":%lu,\"bv\":%.2f,\"bi\":%.1f,\"sv\":%.2f,\"sil\":%.1f,\"sir\":%.1f,\"sp\":%.1f}",
-      BLE_PROTOCOL_VERSION, millis(),
+    snprintf(epsPart, sizeof(epsPart),
+      "\"bv\":%.2f,\"bi\":%.1f,\"sv\":%.2f,\"sil\":%.1f,\"sir\":%.1f,\"sp\":%.1f",
       ina_data.batteryVoltage, ina_data.batteryCurrent, ina_data.SolarPanelVoltage,
       ina_data.leftSolarPanelCurrent, ina_data.rightSolarPanelCurrent, solarPowerMw);
+  }
+
+  char sunPart[80] = "";
+  if (init_status.ads_) {
+    snprintf(sunPart, sizeof(sunPart),
+      "\"ph1\":%.0f,\"ph2\":%.0f,\"ph3\":%.0f,\"ph4\":%.0f",
+      ads_data.ph1, ads_data.ph2, ads_data.ph3, ads_data.ph4);
+  }
+
+  int written;
+  if (epsPart[0] && sunPart[0]) {
+    written = snprintf(bleFrames.power, BLE_MAX_FRAME_LEN,
+      "{\"v\":%d,\"t\":%lu,%s,%s}", BLE_PROTOCOL_VERSION, millis(), epsPart, sunPart);
+  } else if (epsPart[0]) {
+    written = snprintf(bleFrames.power, BLE_MAX_FRAME_LEN,
+      "{\"v\":%d,\"t\":%lu,%s}", BLE_PROTOCOL_VERSION, millis(), epsPart);
+  } else if (sunPart[0]) {
+    written = snprintf(bleFrames.power, BLE_MAX_FRAME_LEN,
+      "{\"v\":%d,\"t\":%lu,%s}", BLE_PROTOCOL_VERSION, millis(), sunPart);
   } else {
     written = snprintf(bleFrames.power, BLE_MAX_FRAME_LEN,
       "{\"v\":%d,\"t\":%lu}", BLE_PROTOCOL_VERSION, millis());
