@@ -10,7 +10,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Height
 import androidx.compose.material.icons.filled.SettingsInputAntenna
-import androidx.compose.material.icons.filled.ThreeDRotation
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -206,7 +206,7 @@ private fun AttitudeCard(attitude: com.shahar.shaharsat.data.AttitudeFrame?, onO
             Text("Uncalibrated — see Engineering to calibrate", style = MaterialTheme.typography.labelSmall, color = MissionColors.AccentAmber)
         }
         TextButton(onClick = onOpenAttitude, contentPadding = PaddingValues(0.dp)) {
-            Icon(Icons.Filled.ThreeDRotation, contentDescription = null, modifier = Modifier.size(16.dp))
+            Icon(Icons.Filled.Explore, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(4.dp))
             Text("View 3D model")
         }
