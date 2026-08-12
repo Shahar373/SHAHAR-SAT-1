@@ -40,6 +40,11 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+        // TopAppBar/TopAppBarDefaults (used in DashboardScreen, AttitudeScreen,
+        // EngineeringScreen) are marked @ExperimentalMaterial3Api in Compose
+        // Material3 — this is standard boilerplate, not a real API-stability risk,
+        // so opt in module-wide rather than annotating every call site.
+        freeCompilerArgs += "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api"
     }
 
     buildFeatures {
