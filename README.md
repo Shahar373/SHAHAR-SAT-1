@@ -55,16 +55,24 @@ SPIFFS)" scheme, which fits comfortably. See `firmware/README.md` for the exact 
 - Everything a compiler can't check: real advertising, pairing, notification timing,
   actual sensor behavior. That's what [TEST_PLAN.md](docs/TEST_PLAN.md) §2 onward covers.
 
-**The Android app has not been built** — this environment's outbound proxy explicitly
-denies `dl.google.com` (confirmed via the proxy's own status endpoint, not a transient
-failure), so the Android Gradle Plugin and AndroidX dependencies can't be resolved here,
-and there was no equivalent workaround available the way there was for the firmware's
-ESP32 toolchain (which comes from Espressif's and GitHub's own infrastructure, not
-Google's). The Gradle wrapper is included (`android/gradlew`), so `./gradlew
-assembleDebug` / `./gradlew testDebugUnitTest` should run on a machine with normal network
-access — that first build is Milestone 4's own verification step. The two unit test
-suites (quaternion/SLERP math, telemetry frame parsing) were checked by hand against the
-protocol spec but have not actually been executed.
+**The Android app itself has not been built** — this environment's outbound proxy
+explicitly denies `dl.google.com` (confirmed via the proxy's own status endpoint, not a
+transient failure — `maven.google.com` resolves but every path on it 301-redirects to the
+same blocked `dl.google.com`), so the Android Gradle Plugin and AndroidX can't be
+resolved here, unlike the firmware's ESP32 toolchain, which comes from Espressif/GitHub
+infrastructure rather than Google's. The Gradle wrapper is included (`android/gradlew`),
+so `./gradlew assembleDebug` should run on a machine with normal network access — that
+first full build is Milestone 4's own verification step.
+
+**But the two riskiest pieces of pure logic were independently verified anyway.** The
+Euler→quaternion/SLERP math (`gl/Quaternion.kt`) and the telemetry frame parsing
+(`data/TelemetryFrames.kt`, `data/Command.kt`) have no Android dependency at all — they're
+plain Kotlin. Copied into a throwaway Kotlin/JVM Gradle project (Kotlin + kotlinx.serialization
+from Maven Central, no Google Maven needed) and run for real: **all 19 unit tests pass**,
+including the yaw-wrap SLERP case that's the actual reason quaternions were chosen over
+filtering the three Euler angles independently. This doesn't prove the full app builds —
+Compose, the BLE APIs, and Navigation are still unverified — but it does prove the math
+and parsing this whole feature depends on are actually correct, not just plausible-looking.
 
 ## Firmware origin
 
