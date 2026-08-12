@@ -92,7 +92,7 @@ the `SetWIFI` serial command. Returns `ERR_NO_WIFI_CONFIG` if unconfigured.
 | `ERR_BAD_JSON` | Payload is not valid JSON, or exceeds 200 bytes |
 | `ERR_UNKNOWN_CMD` | `cmd` not recognized |
 | `ERR_MISSING_SEQ` | No `seq` field |
-| `ERR_DUPLICATE_SEQ` | `seq` equals the last accepted — replay guard |
+| `ERR_DUPLICATE_SEQ` | `seq` equals the last accepted one on this connection — duplicate-command guard, not a replay window (see `docs/BLE_PROTOCOL.md` §7.3) |
 | `ERR_NOT_AUTHENTICATED` | Command needs an encrypted link |
 | `ERR_RATE_LIMITED` | Within the 2200 ms motor guard |
 | `ERR_BUSY` | Command queue full |

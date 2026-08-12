@@ -30,6 +30,37 @@ docs/       Architecture, protocol, command reference, telemetry reference, test
   physical kit to answer
 - **[docs/TEST_PLAN.md](docs/TEST_PLAN.md)** — verification procedures
 
+## Build toolchain
+
+| Component | Version | Where it's pinned |
+|---|---|---|
+| JDK | 17+ (built/tested with 21) | Whatever runs `./gradlew` — AGP 8.7.x requires 17 minimum |
+| Gradle | 8.9 | `android/gradle/wrapper/gradle-wrapper.properties` (via the wrapper — don't need a separate Gradle install) |
+| Android Gradle Plugin | 8.7.2 | `android/build.gradle.kts` |
+| Kotlin | 2.0.21 | `android/build.gradle.kts` |
+| compileSdk / targetSdk | 35 | `android/app/build.gradle.kts` — capped at 35 because that's AGP 8.7.x's ceiling; do not bump to 36 without also bumping AGP |
+| minSdk | 31 (Android 12+) | `android/app/build.gradle.kts` — deliberate, see docs/ARCHITECTURE.md's Android section |
+| ESP32 core (Arduino) | 2.0.17 (per the official MySat guide) or 2.0.9 (what this repo's firmware was actually compiled against — see below) | Arduino IDE Boards Manager |
+| NimBLE-Arduino | 2.2.3+ (2.x line required) | Installed manually, not in `libraries.zip` — see `firmware/README.md` |
+
+**Android build commands:**
+```
+cd android
+./gradlew testDebugUnitTest   # unit tests only, no device/emulator needed
+./gradlew assembleDebug       # full debug APK
+```
+Neither has actually been run to completion in this repo's own development environment —
+its network policy blocks `dl.google.com`, which both AGP and AndroidX resolve through
+(`maven.google.com` redirects there too). Run them on a machine with normal internet
+access; see "Status" below for what *has* been verified as a substitute.
+
+**Firmware build command** (already run for real — see "Status"):
+```
+arduino-cli compile --fqbn esp32:esp32:esp32cam:PartitionScheme=no_ota \
+  --libraries <path-to-libraries-folder-with-NimBLE-Arduino-added> \
+  firmware/ino/MySat_main
+```
+
 ## Status
 
 Milestones 0–8 are implemented as code — repo restructured and documented; the firmware

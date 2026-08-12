@@ -47,7 +47,7 @@ All are well-formed RFC 4122 version-4 UUIDs sharing the base
 | Power | `7a3e0002-5b1f-4c9a-9d21-0e6f3a8b4c10` | Read, Notify | Open | 2 Hz |
 | Environment | `7a3e0003-5b1f-4c9a-9d21-0e6f3a8b4c10` | Read, Notify | Open | 1 Hz |
 | System | `7a3e0004-5b1f-4c9a-9d21-0e6f3a8b4c10` | Read, Notify | Open | On change, ≥5 s |
-| Command | `7a3e0010-5b1f-4c9a-9d21-0e6f3a8b4c10` | Write | **Encrypted + authenticated** | — |
+| Command | `7a3e0010-5b1f-4c9a-9d21-0e6f3a8b4c10` | Write | **Per-command** — see §8 | — |
 | Response | `7a3e0011-5b1f-4c9a-9d21-0e6f3a8b4c10` | Notify | Open | Per command |
 | Event | `7a3e0012-5b1f-4c9a-9d21-0e6f3a8b4c10` | Notify | Open | On event |
 
@@ -351,15 +351,26 @@ Rejected without executing: payload over 200 bytes, malformed JSON, unknown `cmd
 
 Error codes are listed in [COMMANDS.md](COMMANDS.md).
 
-### 7.3 Replay protection
+### 7.3 Duplicate-command guard
 
-The firmware stores the last accepted `seq` per connection and **silently rejects a
-repeat** with `ERR_DUPLICATE_SEQ`.
+Called "replay protection" in earlier drafts of this document — that overstates what it
+is. This is **not** a cryptographic anti-replay scheme or a sliding window: the firmware
+stores exactly one number, the last accepted `seq` per connection, and rejects an
+incoming write **only if it is an exact repeat of that one value**, with
+`ERR_DUPLICATE_SEQ`. A captured-and-resent command with a *different* seq (e.g. an
+attacker replaying an old packet with seq 41 after seq 42 was already accepted) is not
+caught by this mechanism — that's not its job. Its actual, narrow job: **stop the same
+logical send from executing twice.**
 
-This exists because Jetpack Compose recomposition can re-fire a side effect, and a
-resent `DEPLOY_SOLAR` would drive the servo again. Guarding in the UI alone is fragile —
-the guard belongs at the protocol level, where it holds regardless of what the client
-does. The counter resets on disconnect; the app starts each session at 1.
+That's deliberately all it needs to be. The concrete failure mode it exists for is
+Jetpack Compose recomposition (or any client bug) re-firing a side effect that resends
+the identical already-sent payload — a resent `DEPLOY_SOLAR` would otherwise drive the
+servo again. [CommandSender.kt](../android/app/src/main/java/com/shahar/shaharsat/ble/CommandSender.kt)
+assigns a fresh `seq` to every *new* `send()` call, so this guard is really a backstop for
+"the same request object got dispatched twice," not a defense against a determined
+replay attacker — Milestone-scope security (§8 above) already covers the actual threat
+model (someone at the desk sending commands they shouldn't), and this guard is not part
+of that story. The counter resets on disconnect; the app starts each session at seq 1.
 
 Separately, `setStateMotor()` enforces its own 2200 ms hardware rate limit
 (`control.h:176-187`) matching the Nano's servo power-gating. A command inside that window
@@ -395,17 +406,44 @@ compete with telemetry for airtime.
 | IO capability | `BLE_HS_IO_DISPLAY_ONLY` |
 | Passkey | 6 digits, fixed in `ble_config.h` |
 
-Only the **Command** characteristic requires encrypted + authenticated write. Telemetry
-stays open for reading.
+### Where auth is actually enforced — per command, not per characteristic
+
+There is exactly **one** Command characteristic carrying every command, so a GATT-level
+security flag (`WRITE_ENC`/`WRITE_AUTHEN`) on it would block *all* writes — including
+`PING`/`GET_STATUS` — until after pairing. That contradicts the explicit goal of letting
+an app prove connectivity before the user deals with a pairing dialog. So the Command
+characteristic itself is **plain `WRITE`**, and auth is decided inside the firmware's
+write callback, per command, using each command's `requiresAuth` flag from
+`command_bus.h`'s `COMMAND_TABLE`:
+
+| Requires the bonded, encrypted link | Commands |
+|---|---|
+| No | `PING`, `GET_STATUS` |
+| Yes | everything else — `DEPLOY_SOLAR`, `RETRACT_SOLAR`, `BLINK_LED`, `LED_ON`/`OFF`, `TAKE_PHOTO`, `ZERO_ATTITUDE`, `CALIBRATE_IMU`, `SAFE_MODE`, `NOMINAL_MODE`, `DESKTOP_MODE`, `WIFI_ON`/`OFF`, `STOP_LOGGING`, `REBOOT` |
+
+The check is `connInfo.isEncrypted() && connInfo.isBonded()` — both the *current
+session's* link encryption and a *persistent* bond, not just an ephemeral encrypted
+pairing. If an auth-required command arrives on a link that isn't both, the firmware
+calls `NimBLEDevice::startSecurity()` to actively request pairing/encryption (this is
+what makes the OS passkey dialog appear if it hasn't already) and responds
+`ERR_NOT_AUTHENTICATED` — the app should retry the command once pairing completes rather
+than treating it as a hard failure.
 
 The reasoning: the threat is someone walking past the desk sending `DEPLOY_SOLAR` or
 `REBOOT`, not eavesdropping on the temperature. Requiring pairing on telemetry would make
 routine debugging with nRF Connect painful for no security gain, while leaving commands
 unprotected would miss the actual threat.
 
-Flow: first connection prompts Android to pair, the user enters the passkey from
-`ble_config.h`, Android stores the bond, and subsequent connections are automatic with no
-prompt. Bonds survive reboot on both sides.
+### Flow
+
+The app proactively calls `BluetoothDevice.createBond()` right after service discovery
+(see `BleClient.kt`) so pairing happens up front on first connection rather than being
+deferred to the first authenticated command — matching the "prompts once, then silent"
+UX in `docs/ARCHITECTURE.md`'s Android section. The firmware-side `startSecurity()` call
+above is the backstop for the case where that didn't happen (bonding declined, cleared, or
+skipped) rather than the primary trigger. Once bonded, subsequent connections are
+automatic with no prompt on either side. Bonds survive reboot on both sides (NVS on the
+firmware, Android's own bond store on the phone).
 
 The default passkey is committed in `ble_config.h` and **should be changed before the kit
 sits somewhere public** — a value in a public repository protects nobody. Changing it

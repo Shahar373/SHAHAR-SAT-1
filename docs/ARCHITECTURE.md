@@ -417,7 +417,80 @@ Known costs, stated rather than hidden:
 
 ---
 
-## 4. Milestones
+## 4. Remove Before Flight (RBF) / hard power-off
+
+Established from the official MySat Kit Guide (the user supplied it directly; see
+`docs/HARDWARE_NOTES.md`'s "Resolved by the official MySat guide" section). This is a
+**hardware inhibitor with no firmware involvement whatsoever** — worth documenting
+precisely because it's the one thing in this whole system that BLE cannot see, control,
+or substitute for.
+
+### What it is and how it works
+
+*"A space satellite does not have a conventional power switch — its subsystems are
+powered by default. However, while the CubeSat is still on Earth, it can be physically
+(not programmatically) turned off by inserting the inhibitor pin 'Remove Before Flight'
+into its designated socket."* — MySat Kit Guide.
+
+The plug is a **normally-closed physical switch**: inserting it pushes the contacts
+apart, opening the circuit. This is the reverse of what the name suggests at first
+glance — insertion is what cuts power, not removal.
+
+### What it inhibits, and what it does not
+
+| Power path | Cut by RBF? |
+|---|---|
+| Onboard Li-ion 18650 battery | **Yes** |
+| USB-C 5V IN port | **Yes** |
+| PROGRAMER connector (direct 5V/GND feed) | **No — stays live** |
+
+The guide is explicit about the gap: *"The Remove Before Flight plug does not cut off
+power if it is supplied directly through the PROGRAMER port."* Whoever wires a
+USB-to-TTL programmer to the PROGRAMER header and inserts the RBF plug expecting the
+board to be dead **will be wrong** — the ESP32-CAM, Nano, and everything else stay
+powered. This is the one safety fact in this document most worth internalizing, because
+it inverts the expected mental model ("RBF in = definitely off").
+
+A second, independent power path exists: the **MH CD-42 battery controller module**
+(press once = ON, press twice = OFF) sits between the battery and the rest of the board
+and can also be switched off directly.
+
+### Relationship to SAFE_MODE / REBOOT
+
+**BLE, `SAFE_MODE`, and `REBOOT` are all firmware — none of them are a substitute for
+RBF.** `SAFE_MODE` (`command_bus.h`) stops logging and retracts the panels but leaves
+the ESP32 fully powered and BLE advertising; `REBOOT` calls `ESP.restart()`, which
+power-cycles the MCU but never touches the battery or 5V rail. If the goal is "genuinely
+no power flowing," only RBF (or the CD-42 button, or physically disconnecting the
+USB-C/PROGRAMER cables) does that — this project doesn't add a software equivalent and
+was never asked to.
+
+### Interaction with LittleFS — a real risk this project should flag, not hide
+
+RBF is also the kit's **documented normal reset procedure** — the guide has the user
+insert-then-immediately-remove the plug several times during ordinary firmware upload
+steps (to enter bootloader mode, and again afterward to leave it), not just as an
+emergency stop. A brief insert-and-remove is therefore routine and already handled by the
+existing boot/shutdown bookkeeping (`finalizeSystemStartup()`, `event_log.h`'s
+BOOT/SHUTDOWN pairing).
+
+The real risk is **leaving the plug inserted, or an unplanned power loss, while flash is
+mid-write** — `writeEventLog()` (`event_log.h:95-111`) does a read-count → rewrite-to-tmp
+→ remove → rename sequence that is not atomic, and `writeDataRow()`
+(`data_logger.h:212-293`) similarly writes a CSV row and then a separate state file on
+every call. A cut mid-sequence can corrupt the event log or orphan a `.tmp` file. This
+was already true of the original firmware and is not introduced by BLE — it's noted here
+because RBF is the mechanism by which a user is likely to trigger it, and the desktop-kit
+use case (sitting on a desk, periodically power-cycled) makes it more likely to matter
+than it would for a satellite that's only power-cycled once before launch.
+
+**No firmware change is made for this in the stabilization pass** — flagged here as a
+known, pre-existing limitation rather than fixed, consistent with the "no new features"
+scope for this pass.
+
+---
+
+## 5. Milestones
 
 | # | Deliverable | Status |
 |---|---|---|
@@ -427,7 +500,7 @@ Known costs, stated rather than hidden:
 | 3 | Command queue, `command_bus.h`, console refactor, bonding | Done, compiles |
 | 4 | Android project, permissions, scan, connect, subscribe | Done |
 | 5 | Dashboard + telemetry rendering + Engineering screen | Done |
-| 6 | Controls with confirmation + seq replay guard | Done |
+| 6 | Controls with confirmation + seq duplicate-command guard | Done |
 | 7 | OpenGL attitude visualization | Done |
 | 8 | `spacecraft_mode.h`, Wi-Fi on demand, `TAKE_PHOTO` | Done, compiles |
 | 9 | Long-duration soak, `TEST_PLAN.md` execution, polish | **Blocked — needs the physical kit** |
@@ -446,7 +519,7 @@ required, before ever touching the app.
 
 ---
 
-## 5. Repository structure
+## 6. Repository structure
 
 ```
 firmware/     ino/, libraries.zip, README.md, license.md   (upstream MySat, moved intact)
@@ -465,7 +538,7 @@ redistributed.
 
 ---
 
-## 6. Related documents
+## 7. Related documents
 
 - [BLE_PROTOCOL.md](BLE_PROTOCOL.md) — UUIDs, GATT layout, frame formats, security
 - [COMMANDS.md](COMMANDS.md) — command set, arguments, errors, safety

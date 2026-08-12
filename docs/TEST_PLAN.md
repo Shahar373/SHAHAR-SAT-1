@@ -74,7 +74,7 @@ the firmware side independently.
 | # | Check | Expected |
 |---|---|---|
 | 4.1 | Read Attitude characteristic directly (no subscribe) | Valid JSON, matches last notify |
-| 4.2 | Notification rate — Attitude | ~10 Hz while orientation is changing; falls to ~2 Hz keep-alive when still |
+| 4.2 | Notification rate — Attitude | Fixed ~10 Hz, always — **not** adaptive; verify it does *not* slow down when the satellite is still (that would indicate an unintended regression, not a feature) |
 | 4.3 | Notification rate — Power | ~2 Hz |
 | 4.4 | Notification rate — Environment | ~1 Hz |
 | 4.5 | Notification rate — System | On change, or every ≥5 s otherwise |
@@ -210,12 +210,35 @@ minSdk 31 — no Location permission should ever be requested.
 | 12.1 | BLE connected, `WIFI_ON` sent | Wi-Fi comes up; measure BLE notification jitter during the transition |
 | 12.2 | `TAKE_PHOTO` while BLE connected and Wi-Fi off | Succeeds; heap does not approach exhaustion (§1.4) |
 | 12.3 | `TAKE_PHOTO` while BLE connected and Wi-Fi on | Same, this is the documented highest-risk moment — watch heap closely |
-| 12.4 | DESKTOP mode at boot | Wi-Fi stays off until `WIFI_ON` is sent |
+| 12.4a | DESKTOP mode at boot, no `/config.txt` (fresh device) | Wi-Fi stays off until `WIFI_ON` is sent — `setMode(MODE_DESKTOP)` itself never touches Wi-Fi; it's off only because nothing else started it |
+| 12.4b | DESKTOP mode at boot, `/config.txt` says `useWiFi=Yes` (previously configured via serial `SetWIFI`) | Wi-Fi auto-connects during `setup()`, **before** `setMode(MODE_DESKTOP)` runs — this is unchanged original behavior, not overridden by DESKTOP mode. If this surprises you, that's the point of this row: DESKTOP mode is not a Wi-Fi killswitch for an already-configured device, only the default for a fresh one. See `docs/ARCHITECTURE.md` §2.6. |
 | 12.5 | Advertising interval measured | Matches 100-250 ms target |
 
 ---
 
-## 13. Long-duration soak
+## 13. Remove Before Flight (RBF)
+
+Electrical behavior is documented from the official MySat guide, not discovered here —
+see `docs/ARCHITECTURE.md` §4 and `docs/HARDWARE_NOTES.md`. These checks confirm the
+documented behavior against the actual kit, and specifically probe the one interaction
+this project flagged as a real risk (RBF/power-loss during a flash write) rather than
+fixed.
+
+| # | Check | Expected |
+|---|---|---|
+| 13.1 | Insert RBF plug while powered via USB-C | Board loses power immediately (battery + 5V IN both cut) |
+| 13.2 | Insert RBF plug while powered via the PROGRAMER connector | **Board stays powered** — this is the documented gap, confirm it's real and not guide inaccuracy |
+| 13.3 | Insert-then-immediately-remove RBF (normal reset procedure) | Clean reboot; `event_log.txt` shows a paired SHUTDOWN/BOOT, no corruption |
+| 13.4 | Remove RBF plug after insertion | Power returns; firmware boots normally |
+| 13.5 | MH CD-42 button: press once | Module powers on |
+| 13.6 | MH CD-42 button: press twice | Module powers off |
+| 13.7 | Insert RBF while `StartLogging` is actively writing a CSV row | Check `/mdata_*.csv` and `/logger_state.txt` afterward for a truncated row or desync between them — this is the risk flagged in ARCHITECTURE.md §4, not previously tested |
+| 13.8 | Insert RBF mid-write of `writeEventLog()` (hard to time exactly; repeat power-cycles a few times in a row is a reasonable proxy) | Check for an orphaned `/event_log.tmp` or a corrupted `/event_log.txt` |
+| 13.9 | BLE bond survives an RBF power cycle | Reconnect without re-pairing — bonds live in NVS, which is flash, not RAM |
+
+---
+
+## 14. Long-duration soak
 
 Run after Milestone 9. Sample `ESP.getFreeHeap()`, `ESP.getMinFreeHeap()`,
 `LittleFS.usedBytes()`, and connection/disconnect count at fixed intervals throughout.

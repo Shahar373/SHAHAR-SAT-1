@@ -195,20 +195,28 @@ Two health caveats:
 
 | Frame | BLE rate | Underlying source rate |
 |---|---|---|
-| Attitude | 10 Hz | 500 ms sweep — **interpolated between samples** |
-| Power | 2 Hz | 500 ms sweep |
-| Environment | 1 Hz | BME680 ~1 Hz internal |
-| System | on change, ≥5 s | — |
+| Attitude | **fixed 10 Hz, always** | 500 ms sweep — **interpolated between samples** |
+| Power | fixed 2 Hz | 500 ms sweep |
+| Environment | fixed 1 Hz | BME680 ~1 Hz internal |
+| System | on change (real change-detection), floor of 5 s | — |
 
-**The 10 Hz attitude rate exceeds the 2 Hz sensor sweep.** This is deliberate: sending the
-same value five times would be wasteful, so the firmware notifies at 10 Hz only while the
-attitude is actually changing, and falls back to a 2 Hz keep-alive when the satellite is
-still. Combined with app-side SLERP, this produces smooth motion without inventing data.
+**The 10 Hz attitude rate is fixed, not adaptive.** `bleTelemetryTick()`
+(`ble_service.h`) notifies Attitude on a flat `now - bleLastAttitudeNotify >=
+BLE_ATTITUDE_INTERVAL_MS` check with no stillness/change detection — unlike System, which
+genuinely does compare a signature of its fields and only notifies early on real change
+(`bleSystemSignature()`). An earlier draft of this document described Attitude as also
+falling back to a slower rate when the satellite is still; that was aspirational and never
+implemented, and the correction is to this document, not the firmware — fixed-rate,
+always-10Hz is the simpler design and is being kept deliberately rather than adding
+stillness detection as a new feature.
 
-Smoothness ultimately comes from the app's interpolation, not from the sensor rate — the
-IMU genuinely updates at 2 Hz as far as the firmware exposes it. Raising the sweep rate
-would mean touching `SENSOR_INTERVAL` (`MySat_main.ino:70`) and paying the ~100 ms MPU
-busy-wait more often, which would degrade the web server. Deferred.
+**The 10 Hz attitude rate exceeds the 2 Hz sensor sweep.** The IMU genuinely only updates
+every 500 ms; the same value is notified twice in a row roughly every other 100 ms tick.
+This is intentional — see docs/BLE_PROTOCOL.md §4's note on notification jitter from the
+~100 ms MPU busy-wait. Smoothness comes from the app's SLERP interpolation, not from the
+firmware inventing intermediate samples. Raising the actual sensor rate would mean
+touching `SENSOR_INTERVAL` (`MySat_main.ino:70`) and paying the ~100 ms MPU busy-wait more
+often, degrading the web server — deferred, and out of scope for a stabilization pass.
 
 ---
 

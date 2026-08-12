@@ -56,7 +56,18 @@ LittleFS usage from `docs/ARCHITECTURE.md` §1.9.
 esp32:esp32:esp32cam:PartitionScheme=no_ota`) against esp32:esp32@2.0.9
 + NimBLE-Arduino 2.2.3 + the libraries above, zero warnings from any of
 the new or edited files. 1,285,805 bytes flash (61% of the 2MB app
-partition), 61,804 bytes RAM (18%). This does not confirm behavior on
+partition), 61,804 bytes RAM (18%).
+
+**Note on the core version**: the official MySat guide pins **2.0.17**, not 2.0.9.
+Installing 2.0.17 specifically was attempted and blocked by an environment-specific
+issue unrelated to this project's code — see `docs/HARDWARE_NOTES.md`'s "Resolved by
+the official MySat guide" section for the exact reason (a `dfu-util` tool dependency
+from a different, also-blocked package index; irrelevant to this board, which uploads
+over serial). 2.0.9 and 2.0.17 are the same 2.0.x line, so the compile is expected to
+be identical, but that is not yet directly confirmed — re-verify against 2.0.17 on a
+machine with normal internet access before treating this as fully closed.
+
+This does not confirm behavior on
 real hardware (BLE pairing, actual timing, the PSRAM question in
 `docs/HARDWARE_NOTES.md` #1) — only that the code is syntactically and
 semantically valid C++ against the real toolchain and library APIs.
