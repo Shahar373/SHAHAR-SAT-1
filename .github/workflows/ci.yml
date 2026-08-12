@@ -106,6 +106,10 @@ jobs:
       - name: Regression — Nano (ATmega328P) sketch still compiles
         run: |
           arduino-cli core install arduino:avr
+          # The Arduino IDE bundles the Servo library with every AVR install;
+          # arduino-cli's arduino:avr core does not, so it must be fetched
+          # separately or MySat_Nano_ATmega328p.ino's `#include <Servo.h>` fails.
+          arduino-cli lib install Servo
           arduino-cli compile \
             --fqbn arduino:avr:nano \
             firmware/ino/MySat_Nano_ATmega328p
