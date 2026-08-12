@@ -1,121 +1,42 @@
-<img src="https://drive.google.com/uc?export=download&id=10ScfFZb5kTdQQ1aUS-J6Ik5yzo1wd_EH" alt="MySat" width="150"/>
+# SHAHAR-SAT 1
 
-[MySat Webstore](https://www.mysatkit.com/)
+Turning a MySat Space Fan Kit into an interactive desktop CubeSat model: power it on,
+open an Android app, see live telemetry, send commands, and watch a 3D model track the
+satellite's real orientation over Bluetooth Low Energy — no ground station, no RF dongle,
+no USB, no serial terminal.
 
-# MySatKit-Firmware
-This repository contains the main firmware for MySat Kit microcontrollers (ESP32-CAM and ATmega328P).  <br/><br/>
-**Purpose:** Simulate the functionality of a 1U CubeSat nanosatellite.  
-**Required software:** Arduino IDE 2.0+.
+BLE is an **additional** transport layered onto the existing MySat firmware. Wi-Fi, the
+web GUI, the serial console, the HC-12 radio wiring, the camera, logging and solar
+deployment all keep working exactly as before.
 
-**Instructions:**
-[MYSAT KIT GUIDE](https://docs.google.com/document/d/146EPTvLMzydpwUMsbJWAC3gcRO6yPDe3p8kIpxRUwU4/edit?tab=t.0) [(→ Microcontroller Setup Guide)](https://docs.google.com/document/d/146EPTvLMzydpwUMsbJWAC3gcRO6yPDe3p8kIpxRUwU4/edit?tab=t.mkgezpqxvo88#heading=h.d7als96if9cq)
+## Repository structure
 
-**Repo structure:**  
-- `ino` - contains Arduino projects
-  - `MySat_main` - for ESP32-CAM
-  - `MySat_Nano_ATmega328p` - for Nano board (ATmega328P)
-- `libraries.zip` - archive with libs for ESP32 firmware
+```
+firmware/   MySat ESP32-CAM + Nano firmware (upstream MySatKit-Firmware, plus the BLE layer)
+android/    SHAHAR-SAT Android app — Kotlin, Jetpack Compose, native BLE APIs
+docs/       Architecture, protocol, command reference, telemetry reference, test plan
+```
 
+## Documentation
 
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — how the existing firmware is built,
+  where BLE plugs in, and why
+- **[docs/BLE_PROTOCOL.md](docs/BLE_PROTOCOL.md)** — GATT service, UUIDs, frame formats,
+  security
+- **[docs/COMMANDS.md](docs/COMMANDS.md)** — the command set and safety model
+- **[docs/TELEMETRY.md](docs/TELEMETRY.md)** — every telemetry field, its unit and source
+  — and what the hardware does *not* provide
+- **[docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md)** — open questions that need the
+  physical kit to answer
+- **[docs/TEST_PLAN.md](docs/TEST_PLAN.md)** — verification procedures
 
----
+## Status
 
-# Release notes
+Milestone 0 — repository restructured, architecture documented. See
+[ARCHITECTURE.md §Milestones](docs/ARCHITECTURE.md) for the full sequence from BLE
+proof-of-concept through the Android app to long-duration soak testing.
 
-## V.1.4
+## Firmware origin
 
-**Release date: 2026/06/22**  
-**Changes**:
-|||
-|:-|--|
-| New Features → | • implemented a system event logging with Web GUI export capability |
-| | • added telemetry frame counting |
-| | • added the ability to clear mission data csv files |
-| UI Updates → | • added a mission data logging status indicator to the Web GUI |
-
-**MySat boards support:**
-> *full:* v.1.5.6+  
-> *partial:* v.1.5.2+
-
-## V.1.3
-
-**Release date: 2026/04/06**  
-**Changes**:
-|||
-|:-|--|
-| New Features → | • implemented local photo storage (buffer for 10 images) |
-| | • implemented Mission data logging to CSV files|
-| | • added `BlinkLED` command for quick hardware connection testing |
-| UI Updates → | • added support for displaying saved camera frames |
-| | • integrated "Connection Status" indicator to monitor real-time data sync |
-| | • revamped "Sunlight Trackers" widget with coordinate axes (X/Y) and sensor mapping |
-| | • added "Battery" and "Solar panels" monitors to Web GUI |
-| | • added log file download capability via the Web GUI |
-| | • minor changes |
-| Bug Fixes → | • minor bug fixes|
-
-**MySat boards support:**
-> *full:* v.1.5.6+  
-> *partial:* v.1.5.2+
-
-## V.1.2
-
-**Release date:** 2026/04/02
-**Changes**:
-|||
-|:-|--|
-| New Features → | • integrated Signal LED system for real-time system status indication |
-| | • added Indoor Air Quality (IAQ) index calculation based on the BME680 data |
-| | • added option to set a custom callsign for the satellite |
-| | • implemented `TurnConsole` command to toggle data broadcasting mode |
-| | • implemented LittleFS file system for reliable data storage |
-| UI Updates → | • added Arduino IDE Plotter mode for real-time data visualization |
-| | • introduced Debug mode for extended system process monitoring |
-| | • ensured Web GUI autonomy (offline operation without internet connection) |
-| | • minor changes and bug fixes |
-| Bug Fixes → | • eliminated latencies and lags in the Web GUI performance |
-
-**MySat boards support:**
-> *full:* v.1.5.6+  
-> *partial:* v.1.5.2+
-
-## V.1.1  
-
-**Release date:** 2025/10/03   
-**Changes**:
-|||
-|:-|--|
-| New Features → | • added support for INA3221, voltage&current sensor|
-|| • added rotation angle calculation using the MPUxxxx module|
-|| • implemented software protection for servomotor|
-| UI Updates → | • new Web GUI widget for the solar navigation system|
-|| • displaying photo capture time in Web GUI|
-|| • added console commands for controlling servomotor and StarLED |
-|| • minor changes and bug fixes|
-| Bug Fixes → | • ensured compatibility with v.1.5.5 boards (for HC-12 module)|
-
-**MySat boards support:**
-> *full:* v.1.5.3+  
-> *partial:* v.1.5.2
-
-## V.1.0.1  
-
-**Release date:** 2025/05/13   
-**Changes**:
-|||
-|:-|--|
-| New Features → |• added Wi-Fi configuration function |
-|| • added RTC configuration function|
-| Bug Fixes → | • minor bug fixes|
-
-**MySat boards support:**
-> *full:* v.1.5.2 - v.1.5.4 (no newer!)
-
-## V.1.0.0
-
-**Release date:** 2025/01/18  
-**Changes**:  
-[ initial release ]
-
-**MySat boards support:**
-> *full:* v.1.5.2 - v.1.5.4 (no newer!)
+`firmware/` starts from [MySatKit-Firmware](https://github.com/MySatKit/MySatKit-Firmware)
+v1.4. See `firmware/README.md` for the upstream project's own documentation.
