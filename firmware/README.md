@@ -16,7 +16,33 @@ This repository contains the main firmware for MySat Kit microcontrollers (ESP32
   - `MySat_Nano_ATmega328p` - for Nano board (ATmega328P)
 - `libraries.zip` - archive with libs for ESP32 firmware
 
+---
 
+# SHAHAR-SAT 1 additions
+
+This fork adds a BLE telemetry/command layer on top of the firmware
+above — see [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) for what
+it does and why. Two build-setup changes it requires, beyond what's
+already in `libraries.zip`:
+
+**Extra library — install via Arduino IDE Library Manager (not bundled
+in `libraries.zip`):**
+- `NimBLE-Arduino` (h2zero) — targeting its 2.x API. Chosen over the
+  ESP32 core's built-in Bluedroid BLE stack because it costs roughly
+  100-150KB of flash instead of 500-700KB for an equivalent GATT server;
+  see `docs/ARCHITECTURE.md` §1.9/§2.2 for why that margin matters here.
+
+**Partition scheme — required, the stock schemes don't leave enough
+app-partition headroom for BLE alongside Wi-Fi + camera + BSEC:**
+- Use `ino/MySat_main/partitions.csv` (Tools > Partition Scheme > Custom
+  in the Arduino IDE, or select the file directly if your IDE version
+  supports per-sketch partition CSVs).
+
+The BLE layer has not been build-verified against the real ESP32
+toolchain in the environment it was written in (no `arduino-cli` / ESP32
+core available there) — the first compile on real hardware is the
+opening step of Milestone 1's own test pass, see
+[`../docs/TEST_PLAN.md`](../docs/TEST_PLAN.md) §1.
 
 ---
 

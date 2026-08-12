@@ -152,21 +152,25 @@ void handleCommands() {  // read commands for changing data
         recognized = true;
 
       } else if (inputBuffer.equalsIgnoreCase("TurnLed")) {
-        light_on();
+        // Routed through command_bus.h instead of calling light_on()
+        // (the HTTP handler in server.h) directly — light_on() ends with
+        // a server.send() that was previously executed with no HTTP
+        // client in flight. See docs/COMMANDS.md §4.
+        executeCommand(CMD_TOGGLE_LED);
         recognized = true;
 
       } else if (inputBuffer.equalsIgnoreCase("SolarDeploy")) {
-        setStateMotor(true);
+        executeCommand(CMD_DEPLOY_SOLAR);
         reactToCommand("Deploying Solar Panels...");
         recognized = true;
 
       } else if (inputBuffer.equalsIgnoreCase("SolarRetract")) {
-        setStateMotor(false);
+        executeCommand(CMD_RETRACT_SOLAR);
         reactToCommand("Retracting Solar Panels...");
         recognized = true;
 
       } else if (inputBuffer.equalsIgnoreCase("SolarMove")) {
-        setStateMotor(!stateMotor);
+        executeCommand(CMD_TOGGLE_SOLAR);
         reactToCommand("Moving Solar Panels...");
         recognized = true;
 
@@ -248,7 +252,7 @@ void handleCommands() {  // read commands for changing data
         recognized = true;
 
       } else if (inputBuffer.equalsIgnoreCase("BlinkLed")) {
-        startBlink(stateLight);
+        executeCommand(CMD_BLINK_LED);
         recognized = true;
 
       } else if (inputBuffer.equalsIgnoreCase("SendEventLog")) {

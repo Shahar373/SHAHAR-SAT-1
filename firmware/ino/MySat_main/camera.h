@@ -24,7 +24,14 @@ int globalPhotoCounter = 0;
 std::vector<PhotoRecord> photoRecords;
 
 bool init_camera() {
-  camera_config_t config;
+  // Previously `camera_config_t config;` was declared with no initializer
+  // and only ~20 of its fields were assigned below, leaving fb_location,
+  // grab_mode and sccb_i2c_port as indeterminate stack garbage — whether
+  // the framebuffer landed in PSRAM was down to chance. See
+  // docs/HARDWARE_NOTES.md #1. Zero-initializing and setting fb_location
+  // from a real psramFound() check fixes that, with a conservative
+  // DRAM+SVGA fallback if no PSRAM is detected.
+  camera_config_t config = {};
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
   config.pin_d0 = Y2_GPIO_NUM;
@@ -45,9 +52,20 @@ bool init_camera() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_XGA;
-  config.jpeg_quality = 15;
   config.fb_count = 1;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+  if (psramFound()) {
+    config.frame_size = FRAMESIZE_XGA;
+    config.jpeg_quality = 15;
+    config.fb_location = CAMERA_FB_IN_PSRAM;
+    logDebug("[CAM] PSRAM found - framebuffer in PSRAM, XGA q15");
+  } else {
+    config.frame_size = FRAMESIZE_SVGA;
+    config.jpeg_quality = 20;
+    config.fb_location = CAMERA_FB_IN_DRAM;
+    LOG_WARN("[CAM] No PSRAM detected - framebuffer in DRAM, downgraded to SVGA q20");
+  }
 
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
@@ -186,6 +204,53 @@ bool savePhoto(camera_fb_t* fb, const char* timestamp) {
 
    LOG_INFO("[PHOTO] Saved photo #" + String(globalPhotoCounter) + " (" + String(written) + " bytes)");
   return true;
+}
+
+enum PhotoCaptureError { PHOTO_ERR_NONE, PHOTO_ERR_CAPTURE, PHOTO_ERR_SAVE };
+
+struct PhotoCaptureResult {
+  bool ok = false;
+  camera_fb_t* fb = nullptr;  // valid only if ok; caller MUST esp_camera_fb_return(fb) when done
+  int id = 0;
+  PhotoCaptureError error = PHOTO_ERR_NONE;
+};
+
+// Shared capture path for both /get_photo (server.h) and the BLE
+// TAKE_PHOTO command (command_bus.h) — factored out so there is one
+// implementation of "capture, with a bounded retry, then save" rather
+// than two. Replaces the original unbounded `while (!fb) { fb =
+// esp_camera_fb_get(); }` (which could hang loop() forever on a
+// persistent capture failure) with a fixed retry count.
+PhotoCaptureResult capturePhotoToStorage(const char* timestamp) {
+  PhotoCaptureResult result;
+
+  camera_fb_t* old_fb = esp_camera_fb_get();
+  if (old_fb) {
+    esp_camera_fb_return(old_fb);
+    logDebug("[PHOTO] Initial frame discarded.");
+  }
+
+  camera_fb_t* fb = nullptr;
+  const int CAPTURE_RETRIES = 3;
+  for (int attempt = 0; attempt < CAPTURE_RETRIES && !fb; attempt++) {
+    fb = esp_camera_fb_get();
+  }
+  if (!fb) {
+    logDebug("[PHOTO] Capture failed after " + String(CAPTURE_RETRIES) + " attempts");
+    result.error = PHOTO_ERR_CAPTURE;
+    return result;
+  }
+
+  if (!savePhoto(fb, timestamp)) {
+    esp_camera_fb_return(fb);
+    result.error = PHOTO_ERR_SAVE;
+    return result;
+  }
+
+  result.ok = true;
+  result.fb = fb;
+  result.id = globalPhotoCounter;
+  return result;
 }
 
 String getPhotoListJson() {

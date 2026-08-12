@@ -1,0 +1,18 @@
+# SHAHAR-SAT 1 — custom partition table for a 4MB ESP32-CAM, no OTA.
+#
+# The stock "Default 4MB with spiffs" scheme gives only ~1.2MB to the app
+# partition; "Huge APP" gives 3MB to the app but shrinks the filesystem to
+# 1MB, below the ~1.46MB worst-case LittleFS usage this project already
+# has (web assets + 10 photos + 3600 CSV rows — see docs/ARCHITECTURE.md
+# §1.9). Adding NimBLE (~100-150KB) makes the stock app partition tight,
+# so this table trades a little filesystem headroom for more app space.
+#
+# Select it in the Arduino IDE: Tools > Partition Scheme > "Custom" (or
+# select this file directly if your IDE version supports per-sketch
+# partition CSVs — see firmware/README.md's BLE/build notes).
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x5000,
+phy_init,   data, phy,     0xE000,   0x1000,
+app0,       app,  factory, 0x10000,  0x260000,
+littlefs,   data, spiffs,  0x270000, 0x190000,

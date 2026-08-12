@@ -1276,31 +1276,7 @@ void handleGetPhoto() {
   }
   unsigned long t_total_start = millis();
 
-  logDebug("[PHOTO] Capture started");
-  unsigned long t_cap = millis();
-  camera_fb_t* old_fb = esp_camera_fb_get();
-  if (old_fb) {
-    esp_camera_fb_return(old_fb);
-    logDebug("[PHOTO] Initial frame discarded.");
-  }
-
-  camera_fb_t* fb = esp_camera_fb_get();
-
-  while (!fb) {
-    fb = esp_camera_fb_get();
-    if (fb) {
-      break;
-    }
-  }
-  if (!fb) {
-    logDebug("[PHOTO] Error: Capture Failed");
-    server.send(500, "text/plain", "Camera capture failed");
-    return;
-  }
-  logDebug("[PHOTO] Captured: " + String(fb->len) + " bytes in " + String(millis() - t_cap) + " ms");
-
   char timestamp[25];
-
   if(init_status.rtc_){
     rtc_struct* current_time = get_rtc();
      snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02dT%02d:%02d:%02d",
@@ -1314,25 +1290,33 @@ void handleGetPhoto() {
     strcpy(timestamp, "unknown");
   }
 
-  if (savePhoto(fb, timestamp)) {
-    DynamicJsonDocument doc(fb->len * 1.4 + 256); 
-    
-    String base64String = base64::encode(fb->buf, fb->len);
-    
-    doc["id"] = globalPhotoCounter; 
-    doc["timestamp"] = timestamp;
-    doc["image"] = base64String;
-
-    String response;
-    serializeJson(doc, response);
-    
-    server.send(200, "application/json", response);
-    writeEventLog("PHOTO " + String(globalPhotoCounter));
-    logDebug("[PHOTO] Successfully saved and sent photo #" + String(globalPhotoCounter));
-  } else {
-    server.send(500, "text/plain", "Failed to save photo");
-    logDebug("[PHOTO] Failed to save photo");
+  // Capture + save is shared with the BLE TAKE_PHOTO command
+  // (command_bus.h) via camera.h's capturePhotoToStorage(), which also
+  // replaces the old unbounded capture retry with a bounded one.
+  unsigned long t_cap = millis();
+  PhotoCaptureResult capture = capturePhotoToStorage(timestamp);
+  if (!capture.ok) {
+    logDebug(capture.error == PHOTO_ERR_CAPTURE ? "[PHOTO] Error: Capture Failed" : "[PHOTO] Failed to save photo");
+    server.send(500, "text/plain", capture.error == PHOTO_ERR_CAPTURE ? "Camera capture failed" : "Failed to save photo");
+    return;
   }
+  camera_fb_t* fb = capture.fb;
+  logDebug("[PHOTO] Captured: " + String(fb->len) + " bytes in " + String(millis() - t_cap) + " ms");
+
+  DynamicJsonDocument doc(fb->len * 1.4 + 256);
+
+  String base64String = base64::encode(fb->buf, fb->len);
+
+  doc["id"] = capture.id;
+  doc["timestamp"] = timestamp;
+  doc["image"] = base64String;
+
+  String response;
+  serializeJson(doc, response);
+
+  server.send(200, "application/json", response);
+  writeEventLog("PHOTO " + String(capture.id));
+  logDebug("[PHOTO] Successfully saved and sent photo #" + String(capture.id));
 
   esp_camera_fb_return(fb);
   logDebug("[PHOTO] --- TOTAL TIME: " + String(millis() - t_total_start) + " ms ---");

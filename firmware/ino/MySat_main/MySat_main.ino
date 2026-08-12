@@ -18,7 +18,12 @@
 #include <LittleFS.h>
 #include <Preferences.h>
 #include "server.h"
+#include "ble_config.h"
+#include "spacecraft_mode.h"
+#include "command_bus.h"
 #include "console.h"
+#include "ble_telemetry.h"
+#include "ble_service.h"
 
 String ssid = "";
 String password = "";
@@ -64,6 +69,9 @@ void setup() {
     }
   }
   //Serial.println("If you want to change WiFi data use the command: SetWIFI ");
+
+  bleInit();
+  setMode(MODE_DESKTOP);
 }
 
 unsigned long lastSensorUpdate = 0;
@@ -88,6 +96,8 @@ void loop() {
   updateSystemHeartbeat(); // Update Heartbeat every 5 seconds
 
   saveBsecState();
+
+  bleLoop();
 }
 
 bool loadWiFiConfig(String& ssid, String& password, String& useWiFi) {
