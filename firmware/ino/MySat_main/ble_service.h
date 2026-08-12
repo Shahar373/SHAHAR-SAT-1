@@ -136,7 +136,9 @@ public:
     uint16_t seq = doc["seq"].as<uint16_t>();
 
     if (haveLastSeq && seq == lastSeq) {
-      bleSendRawResponse(seq, cmdName.c_str(), false, "ERR_DUPLICATE_SEQ", "Replayed sequence number");
+      // Duplicate-command guard, not a replay window — see docs/BLE_PROTOCOL.md
+      // §7.3. Only catches an exact repeat of the immediately-preceding seq.
+      bleSendRawResponse(seq, cmdName.c_str(), false, "ERR_DUPLICATE_SEQ", "Duplicate sequence number");
       return;
     }
 
@@ -147,9 +149,17 @@ public:
       return;
     }
 
-    if (requiresAuth && !connInfo.isEncrypted()) {
+    // The Command characteristic itself is plain WRITE (no WRITE_ENC/WRITE_AUTHEN)
+    // so that PING/GET_STATUS can be written before pairing — see
+    // docs/BLE_PROTOCOL.md §8. Auth is enforced here, per command, instead.
+    // isBonded() (persistent trust) is checked alongside isEncrypted() (this
+    // session's link state) because a bonded device's link is not
+    // automatically re-encrypted on reconnect without something requesting
+    // it — startSecurity() below is that request.
+    if (requiresAuth && !(connInfo.isEncrypted() && connInfo.isBonded())) {
+      NimBLEDevice::startSecurity(connInfo.getConnHandle());
       bleSendRawResponse(seq, cmdName.c_str(), false, "ERR_NOT_AUTHENTICATED",
-                          "Command requires a bonded, encrypted link");
+                          "Command requires a bonded, encrypted link — pairing requested, retry after it completes");
       return;
     }
 
@@ -267,7 +277,10 @@ void bleInit() {
   NimBLEDevice::setMTU(BLE_PREFERRED_MTU);
   // Bonding + MITM + Secure Connections, static passkey — see
   // docs/BLE_PROTOCOL.md §8 for why (commands need pairing, telemetry
-  // doesn't).
+  // doesn't). Note this does NOT itself force pairing before any GATT
+  // operation — it configures what pairing looks like *when it happens*.
+  // Whether a given write requires it is decided per-characteristic (or,
+  // here, per-command — see the Command characteristic below).
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
   NimBLEDevice::setSecurityPasskey(BLE_STATIC_PASSKEY);
@@ -285,9 +298,13 @@ void bleInit() {
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   bleCharSystem = svc->createCharacteristic(BLE_CHAR_SYSTEM_UUID,
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  // Only the command channel requires the bonded, encrypted link.
-  bleCharCommand = svc->createCharacteristic(BLE_CHAR_COMMAND_UUID,
-      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC | NIMBLE_PROPERTY::WRITE_AUTHEN);
+  // Deliberately plain WRITE, not WRITE_ENC|WRITE_AUTHEN. NimBLE enforces a
+  // GATT-level security requirement before the write callback ever runs —
+  // that would block PING/GET_STATUS along with every other command, since
+  // there is exactly one Command characteristic for all of them. Per-command
+  // auth is enforced instead, inside BleCommandCallbacks::onWrite() below —
+  // see docs/BLE_PROTOCOL.md §8 and §7.1 for which commands need it.
+  bleCharCommand = svc->createCharacteristic(BLE_CHAR_COMMAND_UUID, NIMBLE_PROPERTY::WRITE);
   bleCharResponse = svc->createCharacteristic(BLE_CHAR_RESPONSE_UUID, NIMBLE_PROPERTY::NOTIFY);
   bleCharEvent = svc->createCharacteristic(BLE_CHAR_EVENT_UUID, NIMBLE_PROPERTY::NOTIFY);
 
